@@ -288,12 +288,14 @@ async fn refresh_layout(app: AppHandle) {
 
 fn apply_ratios(app: &AppHandle, state: &AppState, ratios: &[f64]) -> Result<Settings, String> {
     let window = app.get_window(MAIN).ok_or("no window")?;
+    // Window getters wait for the main thread, and the main thread locks
+    // `settings` in relayout (resize, tray show): never call them with a lock held.
+    let (w, _) = logical_size(&window);
     let snapshot = {
         let mut s = state.settings.lock().unwrap();
         if ratios.len() != s.accounts.len() || ratios.iter().any(|r| !r.is_finite() || *r <= 0.0) {
             return Err("bad ratios".into());
         }
-        let (w, _) = logical_size(&window);
         s.ratios = layout::clamp_ratios(w, ratios);
         s.clone()
     };
@@ -372,6 +374,16 @@ async fn shortcut(
     action: String,
     index: Option<usize>,
 ) -> Result<(), String> {
+    // Paired start/end lines: after a hang, a start without its end in
+    // paneful.log names the shortcut that got stuck.
+    log::info!("shortcut {action} {index:?}: start");
+    let r = run_shortcut(&app, &state, &action, index);
+    log::info!("shortcut {action}: end");
+    r
+}
+
+fn run_shortcut(app: &AppHandle, state: &AppState, action: &str, index: Option<usize>) -> Result<(), String> {
+    let app = app.clone();
     if action == "help" {
         let open = {
             let mut h = state.help.lock().unwrap();
@@ -383,8 +395,14 @@ async fn shortcut(
             if let Some(host) = app.get_webview(HOST) {
                 let _ = host.set_focus();
             }
-        } else if let Some(id) = *state.active.lock().unwrap() {
-            focus_account(&app, id);
+        } else {
+            // Copy the id out first: in edition 2021 an `if let` on
+            // `*m.lock().unwrap()` keeps the guard for the whole block, and
+            // focus_account locks `active` again -> self-deadlock.
+            let active = *state.active.lock().unwrap();
+            if let Some(id) = active {
+                focus_account(&app, id);
+            }
         }
         return Ok(());
     }
@@ -406,7 +424,8 @@ async fn shortcut(
         state.save(&snapshot);
         relayout(&app);
         if was_open {
-            if let Some(id) = *state.active.lock().unwrap() {
+            let active = *state.active.lock().unwrap(); // see "help" above
+            if let Some(id) = active {
                 focus_account(&app, id);
             }
         }
@@ -419,7 +438,7 @@ async fn shortcut(
     let active = *state.active.lock().unwrap();
     let cur = active.and_then(|a| ids.iter().position(|i| *i == a));
     let n = ids.len();
-    let target = match action.as_str() {
+    let target = match action {
         "focus" => match index {
             Some(i) if i < n => i,
             _ => return Ok(()),
@@ -448,13 +467,13 @@ async fn add_account(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
     let mut acc = Account::new("", COLORS[0]);
     let rect = layout::Rect { x: 0.0, y: layout::TOP_STRIP, w: 10.0, h: 10.0 };
     add_panel(&window, &acc, rect).map_err(|e| e.to_string())?;
+    let (w, _) = logical_size(&window); // not under the lock, see apply_ratios
     {
         let mut s = state.settings.lock().unwrap();
         let n = s.accounts.len();
         acc.label = format!("계정 {}", n + 1);
         acc.color = COLORS[n % COLORS.len()].into();
         s.accounts.push(acc);
-        let (w, _) = logical_size(&window);
         s.ratios = layout::clamp_ratios(w, &layout::with_added(&s.ratios));
         let snapshot = s.clone();
         drop(s);
@@ -467,6 +486,7 @@ async fn add_account(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
 #[tauri::command]
 async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
     let window = app.get_window(MAIN).ok_or("no window")?;
+    let (w, _) = logical_size(&window); // not under the lock, see apply_ratios
     let acc = {
         let mut s = state.settings.lock().unwrap();
         let idx = s
@@ -480,7 +500,6 @@ async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: String) 
             *active = None;
         }
         drop(active);
-        let (w, _) = logical_size(&window);
         s.ratios = layout::clamp_ratios(w, &layout::with_removed(&s.ratios, idx));
         s.fix_ratios();
         #[cfg(windows)]
