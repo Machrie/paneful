@@ -117,3 +117,7 @@ git push origin v0.0.1
 ```
 
 서명은 무료 경로만 쓴다. macOS는 ad-hoc 서명(`signingIdentity: "-"`), Windows는 미서명.
+
+## 라이선스
+
+[MIT](LICENSE). `crates/tauri-runtime-wry`는 Tauri 원본 라이선스(MIT 또는 Apache-2.0)를 따른다.
