@@ -22,7 +22,8 @@ x.com 전용 경량 데스크톱 앱. 한 창에 x.com 패널을 나란히 띄�
 
 | OS | 파일 |
 |---|---|
-| Windows | `Paneful_<버전>_x64-setup.exe` |
+| Windows (설치) | `Paneful_<버전>_x64-setup.exe` |
+| Windows (포터블) | `Paneful_<버전>_x64-portable.zip` |
 | macOS | `Paneful_<버전>_universal.dmg` |
 
 이 앱은 유료 코드 서명을 하지 않았다. 그래서 처음 실행할 때 OS가 경고를 띄운다. 아래 순서대로 한 번만 허용하면 이후엔 그냥 열린다.
@@ -32,6 +33,11 @@ x.com 전용 경량 데스크톱 앱. 한 창에 x.com 패널을 나란히 띄�
 1. `Paneful_..._x64-setup.exe` 실행
 2. "Windows의 PC 보호" (SmartScreen) 창이 뜨면 **추가 정보** → **실행** 클릭
 3. 설치는 현재 사용자 계정에만 되고 관리자 권한은 필요 없다
+
+**포터블(zip)**: 설치 없이 압축을 풀고 `Paneful.exe`를 실행하면 된다. 처음 실행할 때 SmartScreen 경고는 설치판과 똑같이 뜬다.
+
+- 계정 데이터(로그인, 설정, 로그)는 설치판과 같은 `%APPDATA%`·`%LOCALAPPDATA%`의 `dev.machrie.paneful`에 저장된다. exe 옆에 저장되지 않으니 USB에 넣고 다른 PC로 옮겨도 로그인은 따라가지 않는다. 설치판과 같은 PC에서 쓰면 계정을 공유한다
+- WebView2 런타임이 필요하다. 설치판은 없으면 설치 중에 받아 오지만 포터블은 그렇지 않다. Windows 11과 업데이트된 Windows 10에는 이미 들어 있다. 실행하자마자 꺼지거나 아무 창도 안 뜨면 Microsoft의 [WebView2 런타임](https://developer.microsoft.com/microsoft-edge/webview2/)(Evergreen Bootstrapper)을 설치한다
 
 **스마트 앱 컨트롤**(Windows 11, 설정 → 개인 정보 및 보안 → Windows 보안 → 앱 및 브라우저 컨트롤)이 켜져 있으면 서명 안 된 앱이라 실행이 막힌다. 이 경우엔 우회 버튼이 없다. 스마트 앱 컨트롤을 끌지는 각자 판단할 문제다.
 
@@ -62,7 +68,7 @@ x.com 자체 단축키는 클릭해서 포커스가 가 있는 패널에 적용�
 
 앱에서 계정을 먼저 **삭제**해 두면 로그인 정보까지 같이 지워진다. 그 다음:
 
-- **Windows**: 설정 → 앱 → 설치된 앱에서 Paneful 제거. 설정과 로그 폴더가 남으면 `%APPDATA%\dev.machrie.paneful`, `%LOCALAPPDATA%\dev.machrie.paneful`을 지운다
+- **Windows**: 설정 → 앱 → 설치된 앱에서 Paneful 제거(포터블은 폴더째 삭제). 설정과 로그 폴더가 남으면 `%APPDATA%\dev.machrie.paneful`, `%LOCALAPPDATA%\dev.machrie.paneful`을 지운다
 - **macOS**: `응용 프로그램`의 `Paneful`을 휴지통으로. 설정은 `~/Library/Application Support/dev.machrie.paneful`, 로그는 `~/Library/Logs/dev.machrie.paneful`에 남는다
 
 ## 문제가 생기면
