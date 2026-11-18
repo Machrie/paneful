@@ -37,7 +37,7 @@ jobs:
       # No paid signing for now: macOS bundle is ad-hoc signed
       # (signingIdentity "-"), Windows installer is unsigned.
       - name: bundle
-        run: npx --yes @tauri-apps/cli@2 build ${{ matrix.args }}
+        run: npx --yes @tauri-apps/cli@2.12.5 build ${{ matrix.args }}
       - uses: actions/upload-artifact@v4
         with:
           name: paneful-${{ matrix.os }}

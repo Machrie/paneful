@@ -3,6 +3,7 @@
   :root { --bg: #f7f9f9; --fg: #0f1419; --muted: #536471; --line: #cfd9de; }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
   font: 13px/1 system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
   overflow: hidden; user-select: none; -webkit-user-select: none; }
@@ -11,6 +12,13 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 #tabs { position: relative; flex: 1; height: 100%; }
 .tab { position: absolute; top: 0; height: 100%; display: flex; align-items: center; gap: 6px;
   padding: 0 8px; overflow: hidden; white-space: nowrap; }
+.tab .group { display: flex; align-items: center; gap: 6px; }
+.tab .warn { color: #f4212e; }
+.tab button.danger { color: #f4212e; border-color: #f4212e; }
+.tab button:disabled { opacity: .5; cursor: default; }
+.actions { position: relative; z-index: 1; display: flex; align-items: center; gap: 8px;
+  background: var(--bg); padding-left: 8px; }
+#status { color: #f4212e; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .tab button, .actions button { background: none; border: 1px solid var(--line); color: var(--muted);
   border-radius: 4px; padding: 3px 6px; cursor: pointer; font: inherit; }
