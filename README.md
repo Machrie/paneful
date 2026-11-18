@@ -155,12 +155,15 @@ M0 스파이크 검증 체크표는 [docs/m0-checklist.md](docs/m0-checklist.md)
 
 `.github/workflows/build.yml`이 PR마다(그리고 Actions 탭에서 수동 실행 시) Windows·macOS 설치 파일을 빌드해 Actions 아티팩트로 올린다 (받으려면 GitHub 로그인 필요, 기한 있음). main 푸시엔 빌드하지 않는다. 같은 브랜치에 새로 푸시하면 이전 실행은 취소된다.
 
-`v`로 시작하는 태그를 push하면 같은 빌드 결과로 GitHub Release를 만들어 설치 파일을 붙인다. 태그는 `src-tauri/tauri.conf.json`의 `version`과 맞춘다.
+릴리스는 둘 중 하나로 낸다. 어느 쪽이든 먼저 `src-tauri/tauri.conf.json`의 `version`을 올려 두고, 태그는 그 버전과 맞춘다(안 맞으면 릴리스 단계가 실패한다). 빌드가 깨지면 릴리스는 만들어지지 않는다.
 
-```sh
-git tag v0.0.1
-git push origin v0.0.1
-```
+- **브라우저만으로**: 저장소 Actions 탭 → 왼쪽 `build` → 오른쪽 **Run workflow** → Branch `main`, `release`에 `v0.0.1` 입력 → **Run workflow**. 빌드가 끝나면 그 커밋에 태그와 Release를 만든다
+- **git으로**: `v`로 시작하는 태그를 push
+
+  ```sh
+  git tag v0.0.1
+  git push origin v0.0.1
+  ```
 
 서명은 무료 경로만 쓴다. macOS는 ad-hoc 서명(`signingIdentity: "-"`), Windows는 미서명.
 
