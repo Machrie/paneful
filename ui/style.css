@@ -93,3 +93,4 @@ kbd { display: inline-block; min-width: 22px; padding: 3px 6px; border-radius: 6
   background: var(--surface); border: 1px solid var(--line); border-bottom-width: 2px; }
 .foot { margin: 4px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .foot kbd { font-size: 11px; min-width: 18px; padding: 1px 5px; }
+#app-keys dd.warn { color: var(--danger); }

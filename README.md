@@ -58,6 +58,14 @@ x.com 전용 경량 데스크톱 앱. 한 창에 x.com 패널을 나란히 띄�
 
 x.com 자체 단축키는 클릭해서 포커스가 가 있는 패널에 적용된다.
 
+### 트레이로 숨기기
+
+- 상단 바의 **눈 가림** 버튼이나 전역 단축키로 창을 숨긴다. 숨기면 작업 표시줄·Alt+Tab(Windows), Dock·Cmd+Tab(macOS)에서도 사라지고 트레이(macOS는 메뉴 막대) 아이콘만 남는다
+- 다시 띄우기: 전역 단축키, 또는 트레이 아이콘 클릭(Windows) / 메뉴 막대 아이콘 → **Paneful 보이기/숨기기**(macOS)
+- 전역 단축키 기본값은 Windows `Ctrl+Alt+X`, macOS `⌘⌥X`. 다른 앱이 앞에 있어도 먹는다. Paneful이 앞에 있으면 숨기고, 숨겨져 있거나 뒤에 있으면 앞으로 불러온다
+- 단축키를 바꾸려면 앱을 끄고 설정 폴더의 `settings.json`에 `"hotkey": "CommandOrControl+Shift+F12"`처럼 넣는다(Tauri 단축키 표기). `""`이면 끈다. 다른 앱이 이미 잡고 있으면 등록이 실패하고 단축키 창(`Ctrl+/`)에 이유가 뜬다
+- 트레이 메뉴의 **종료**로 완전히 끈다. 창의 닫기(X) 버튼은 지금처럼 앱을 끈다
+
 ## 제거
 
 앱에서 계정을 먼저 **삭제**해 두면 로그인 정보까지 같이 지워진다. 그 다음:
@@ -101,7 +109,8 @@ npx @tauri-apps/cli@2 build           # 설치 파일 (Windows: NSIS .exe, macOS
   - macOS 14+: `data_store_identifier` → `WKWebsiteDataStore(forIdentifier:)`
   - Windows: 같은 호출을 `crates/tauri-runtime-wry` 패치가 WebView2 프로필 이름(UUID hex)으로 바꾼다. 런타임 하나를 공유한다 (업스트림 tauri-apps/tauri#16054 와 같은 방식). 자세한 건 `crates/tauri-runtime-wry/PANEFUL_PATCH.md`
 - 내비게이션 허용 목록(`src-tauri/src/nav.rs`) 밖 링크는 시스템 브라우저로
-- 설정은 `settings.json` (앱 설정 폴더)
+- 설정은 `settings.json` (앱 설정 폴더: Windows `%APPDATA%\dev.machrie.paneful`, macOS `~/Library/Application Support/dev.machrie.paneful`)
+- 트레이·전역 단축키는 `src-tauri/src/tray.rs` (`tray-icon` 피처, `tauri-plugin-global-shortcut`)
 
 M0 스파이크 검증 체크표는 [docs/m0-checklist.md](docs/m0-checklist.md).
 
