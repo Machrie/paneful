@@ -53,7 +53,15 @@ pub struct Settings {
     /// default; Ctrl/Cmd+Shift+H or a click on the top strip shows it.
     #[serde(default)]
     pub show_bar: bool,
+    /// Global show/hide shortcut, Tauri accelerator syntax
+    /// ("CommandOrControl+Alt+X"). Missing = DEFAULT_HOTKEY, "" = off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hotkey: Option<String>,
 }
+
+/// Ctrl+Alt+X (Windows) / Cmd+Option+X (macOS). Not an X shortcut (those
+/// are bare keys and Ctrl/Cmd+Enter) and not one of the app's own.
+pub const DEFAULT_HOTKEY: &str = "CommandOrControl+Alt+X";
 
 /// Whether settings.json may be written back after `load`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +87,7 @@ impl Default for Settings {
             pending_profile_deletes: vec![],
             pending_store_deletes: vec![],
             show_bar: false,
+            hotkey: None,
         }
     }
 }
@@ -138,12 +147,22 @@ impl Settings {
             pending_profile_deletes: field(&v, "pending_profile_deletes"),
             pending_store_deletes: field(&v, "pending_store_deletes"),
             show_bar: field(&v, "show_bar"),
+            hotkey: field(&v, "hotkey"),
         })
     }
 
     fn migrate(&mut self) {
         // v1 is the first version. Future migrations go here.
         self.version = SETTINGS_VERSION;
+    }
+
+    /// Shortcut to register, or None when turned off.
+    pub fn hotkey(&self) -> Option<&str> {
+        match self.hotkey.as_deref().map(str::trim) {
+            None => Some(DEFAULT_HOTKEY),
+            Some("") => None,
+            Some(k) => Some(k),
+        }
     }
 
     pub fn fix_ratios(&mut self) {
@@ -230,5 +249,19 @@ mod tests {
         let (s, persist) = Settings::load(&path);
         assert_eq!(persist, Persist::Yes);
         assert_eq!(s.accounts.len(), 2);
+    }
+
+    #[test]
+    fn hotkey_default_and_off() {
+        let mut s = Settings::default();
+        assert_eq!(s.hotkey(), Some(DEFAULT_HOTKEY));
+        s.hotkey = Some(" ".into());
+        assert_eq!(s.hotkey(), None);
+        s.hotkey = Some("Ctrl+Shift+F12".into());
+        assert_eq!(s.hotkey(), Some("Ctrl+Shift+F12"));
+        // Old settings.json without the key still loads.
+        let v = serde_json::json!({"version": 1, "accounts": [], "ratios": []});
+        let l: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(l.hotkey(), Some(DEFAULT_HOTKEY));
     }
 }
