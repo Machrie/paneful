@@ -2,7 +2,11 @@
 
 use serde::Serialize;
 
+/// Height above the panels while the top bar is shown.
 pub const TOP_BAR: f64 = 36.0;
+/// Height above the panels while the top bar is hidden: a thin strip that
+/// marks the active panel and brings the bar back when clicked.
+pub const TOP_STRIP: f64 = 6.0;
 /// Gap between panels. The host webview underneath shows through and
 /// receives the drag events for resizing.
 pub const GAP: f64 = 6.0;
@@ -16,12 +20,12 @@ pub struct Rect {
     pub h: f64,
 }
 
-pub fn panels(win_w: f64, win_h: f64, ratios: &[f64]) -> Vec<Rect> {
+pub fn panels(win_w: f64, win_h: f64, top: f64, ratios: &[f64]) -> Vec<Rect> {
     let n = ratios.len();
     if n == 0 {
         return vec![];
     }
-    let h = (win_h - TOP_BAR).max(0.0);
+    let h = (win_h - top).max(0.0);
     let usable = (win_w - GAP * (n as f64 - 1.0)).max(0.0);
     let sum: f64 = ratios.iter().sum();
     let mut x = 0.0;
@@ -33,7 +37,7 @@ pub fn panels(win_w: f64, win_h: f64, ratios: &[f64]) -> Vec<Rect> {
         } else {
             (usable * r / sum).floor()
         };
-        out.push(Rect { x, y: TOP_BAR, w, h });
+        out.push(Rect { x, y: top, w, h });
         x += w + GAP;
     }
     out
@@ -124,16 +128,22 @@ mod tests {
 
     #[test]
     fn two_equal() {
-        let p = panels(1206.0, 836.0, &[0.5, 0.5]);
+        let p = panels(1206.0, 836.0, TOP_BAR, &[0.5, 0.5]);
         assert_eq!(p[0], Rect { x: 0.0, y: TOP_BAR, w: 600.0, h: 800.0 });
         assert_eq!(p[1].x, 606.0);
         assert_eq!(p[1].x + p[1].w, 1206.0);
     }
 
     #[test]
+    fn hidden_bar_gives_panels_the_height() {
+        let p = panels(1206.0, 836.0, TOP_STRIP, &[1.0]);
+        assert_eq!(p[0], Rect { x: 0.0, y: TOP_STRIP, w: 1206.0, h: 830.0 });
+    }
+
+    #[test]
     fn clamp_keeps_min() {
         let r = clamp_ratios(1206.0, &[0.95, 0.05]);
-        let p = panels(1206.0, 800.0, &r);
+        let p = panels(1206.0, 800.0, TOP_BAR, &r);
         assert!(p[1].w >= MIN_PANEL - 1.0);
     }
 }

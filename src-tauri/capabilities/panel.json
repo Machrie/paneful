@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "panel",
+  "description": "x.com panels: only the focus report and the app shortcuts (switch panel, show/hide top bar). No core permissions, no account or layout commands.",
+  "webviews": [
+    "panel-*"
+  ],
+  "remote": {
+    "urls": [
+      "https://x.com/*"
+    ]
+  },
+  "permissions": [
+    "allow-panel-focused",
+    "allow-shortcut"
+  ]
+}
