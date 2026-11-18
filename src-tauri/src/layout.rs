@@ -73,9 +73,54 @@ pub fn clamp_ratios(win_w: f64, ratios: &[f64]) -> Vec<f64> {
     r
 }
 
+/// Ratios after appending one panel: the new panel gets an equal share
+/// (1/(n+1)), existing panels keep their proportions to each other.
+pub fn with_added(ratios: &[f64]) -> Vec<f64> {
+    let n = ratios.len() as f64;
+    let sum: f64 = ratios.iter().sum();
+    let mut r: Vec<f64> = if sum > 0.0 {
+        ratios.iter().map(|v| v / sum * n / (n + 1.0)).collect()
+    } else {
+        vec![1.0 / (n + 1.0); ratios.len()]
+    };
+    r.push(1.0 / (n + 1.0));
+    r
+}
+
+/// Ratios after removing panel `idx`: the others keep their proportions.
+pub fn with_removed(ratios: &[f64], idx: usize) -> Vec<f64> {
+    let mut r = ratios.to_vec();
+    if idx < r.len() {
+        r.remove(idx);
+    }
+    let sum: f64 = r.iter().sum();
+    if sum > 0.0 {
+        for v in &mut r {
+            *v /= sum;
+        }
+    }
+    r
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn close(a: &[f64], b: &[f64]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9)
+    }
+
+    #[test]
+    fn add_keeps_proportions() {
+        assert!(close(&with_added(&[0.75, 0.25]), &[0.5, 1.0 / 6.0, 1.0 / 3.0]));
+        assert!(close(&with_added(&[]), &[1.0]));
+    }
+
+    #[test]
+    fn remove_keeps_proportions() {
+        assert!(close(&with_removed(&[0.5, 0.3, 0.2], 0), &[0.6, 0.4]));
+        assert!(close(&with_removed(&[1.0], 0), &[]));
+    }
 
     #[test]
     fn two_equal() {

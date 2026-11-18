@@ -10,7 +10,7 @@ mod nav;
 mod settings;
 
 use serde::Serialize;
-use settings::{Account, Settings, COLORS};
+use settings::{Account, Persist, Settings, COLORS};
 use std::{path::PathBuf, sync::Mutex};
 use tauri::{
     webview::{NewWindowResponse, WebviewBuilder},
@@ -27,10 +27,15 @@ const START_URL: &str = "https://x.com/home";
 struct AppState {
     settings: Mutex<Settings>,
     path: PathBuf,
+    persist: Persist,
 }
 
 impl AppState {
     fn save(&self, s: &Settings) {
+        if self.persist == Persist::No {
+            log::warn!("settings.json was unreadable at start; not overwriting it");
+            return;
+        }
         if let Err(e) = s.save(&self.path) {
             log::error!("saving settings failed: {e}");
         }
@@ -123,15 +128,27 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect) 
         .on_navigation(move |url| match nav::decide(url) {
             nav::Decision::Allow => true,
             nav::Decision::OpenExternal => {
+                // Windows: WebView2 NavigationStarting is top-level only, so
+                // this is a real page navigation and goes to the system browser.
+                // macOS: wry runs this for iframes too, so opening externally
+                // would pop a browser tab per off-list iframe. Just cancel.
+                #[cfg(windows)]
                 let _ = app.opener().open_url(url.as_str(), None::<&str>);
+                #[cfg(not(windows))]
+                log::info!("blocked off-list navigation: {url}");
                 false
             }
             nav::Decision::Block => false,
         })
-        // target=_blank / window.open: never spawn native windows.
-        // Allowed hosts load in the same panel, everything else goes to the
-        // system browser.
+        // target=_blank / window.open: no native windows except sign-in
+        // popups (they need window.opener). Other allowed hosts load in the
+        // same panel, everything else goes to the system browser.
         .on_new_window(move |url, _features| {
+            if nav::is_auth_popup(&url) {
+                // Same WebView2 profile / WKWebViewConfiguration as the panel,
+                // so the login lands in this account's store.
+                return NewWindowResponse::Allow;
+            }
             match nav::decide(&url) {
                 nav::Decision::Allow => {
                     if let Some(wv) = app2.get_webview(&label2) {
@@ -215,25 +232,32 @@ async fn refresh_layout(app: AppHandle) {
     relayout(&app);
 }
 
-#[tauri::command]
-async fn set_ratios(app: AppHandle, state: State<'_, AppState>, ratios: Vec<f64>) -> Result<(), String> {
-    let Some(window) = app.get_window(MAIN) else { return Err("no window".into()) };
-    {
+fn apply_ratios(app: &AppHandle, state: &AppState, ratios: &[f64]) -> Result<Settings, String> {
+    let window = app.get_window(MAIN).ok_or("no window")?;
+    let snapshot = {
         let mut s = state.settings.lock().unwrap();
         if ratios.len() != s.accounts.len() || ratios.iter().any(|r| !r.is_finite() || *r <= 0.0) {
             return Err("bad ratios".into());
         }
         let (w, _) = logical_size(&window);
-        s.ratios = layout::clamp_ratios(w, &ratios);
-    }
-    relayout(&app);
-    Ok(())
+        s.ratios = layout::clamp_ratios(w, ratios);
+        s.clone()
+    };
+    relayout(app);
+    Ok(snapshot)
 }
 
-/// Persist ratios once a drag ends (set_ratios fires on every pointer move).
+/// Live update while dragging (not saved).
 #[tauri::command]
-async fn commit_layout(state: State<'_, AppState>) -> Result<(), String> {
-    let s = state.settings.lock().unwrap().clone();
+async fn set_ratios(app: AppHandle, state: State<'_, AppState>, ratios: Vec<f64>) -> Result<(), String> {
+    apply_ratios(&app, &state, &ratios).map(|_| ())
+}
+
+/// Drag ended: apply the final ratios and persist them in one step, so a
+/// late set_ratios can't be saved over (or under) the final position.
+#[tauri::command]
+async fn commit_layout(app: AppHandle, state: State<'_, AppState>, ratios: Vec<f64>) -> Result<(), String> {
+    let s = apply_ratios(&app, &state, &ratios)?;
     state.save(&s);
     Ok(())
 }
@@ -248,24 +272,30 @@ async fn reload_panel(app: AppHandle, id: String) -> Result<(), String> {
 #[tauri::command]
 async fn add_account(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let window = app.get_window(MAIN).ok_or("no window")?;
-    let acc = {
-        let mut s = state.settings.lock().unwrap();
-        let n = s.accounts.len();
-        let acc = Account::new(format!("계정 {}", n + 1), COLORS[n % COLORS.len()]);
-        s.accounts.push(acc.clone());
-        s.ratios = vec![1.0; n + 1];
-        s.fix_ratios();
-        state.save(&s);
-        acc
-    };
+    // Create the webview first and only then record the account, so a
+    // failed add_child leaves no panel-less account behind.
+    let mut acc = Account::new("", COLORS[0]);
     let rect = layout::Rect { x: 0.0, y: layout::TOP_BAR, w: 10.0, h: 10.0 };
     add_panel(&window, &acc, rect).map_err(|e| e.to_string())?;
+    {
+        let mut s = state.settings.lock().unwrap();
+        let n = s.accounts.len();
+        acc.label = format!("계정 {}", n + 1);
+        acc.color = COLORS[n % COLORS.len()].into();
+        s.accounts.push(acc);
+        let (w, _) = logical_size(&window);
+        s.ratios = layout::clamp_ratios(w, &layout::with_added(&s.ratios));
+        let snapshot = s.clone();
+        drop(s);
+        state.save(&snapshot);
+    }
     relayout(&app);
     Ok(())
 }
 
 #[tauri::command]
 async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let window = app.get_window(MAIN).ok_or("no window")?;
     let acc = {
         let mut s = state.settings.lock().unwrap();
         let idx = s
@@ -274,11 +304,16 @@ async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: String) 
             .position(|a| a.id.to_string() == id)
             .ok_or("no such account")?;
         let acc = s.accounts.remove(idx);
-        s.ratios = vec![1.0; s.accounts.len()];
+        let (w, _) = logical_size(&window);
+        s.ratios = layout::clamp_ratios(w, &layout::with_removed(&s.ratios, idx));
         s.fix_ratios();
         #[cfg(windows)]
         s.pending_profile_deletes.push(acc.profile_name());
-        state.save(&s);
+        #[cfg(target_os = "macos")]
+        s.pending_store_deletes.push(acc.id);
+        let snapshot = s.clone();
+        drop(s);
+        state.save(&snapshot);
         acc
     };
     if let Some(wv) = app.get_webview(&panel_label(&acc)) {
@@ -286,15 +321,34 @@ async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: String) 
     }
     relayout(&app);
 
-    // macOS: drop the WKWebsiteDataStore now (M0 check item).
+    // macOS: try to drop the WKWebsiteDataStore now; whatever fails stays in
+    // pending_store_deletes and is retried on next start.
     #[cfg(target_os = "macos")]
-    {
-        if let Err(e) = app.remove_data_store(acc.store_id()).await {
-            log::warn!("remove_data_store failed: {e}");
-            return Err(format!("계정은 지웠는데 저장소 삭제 실패: {e}"));
+    purge_pending_stores(&app).await;
+    Ok(())
+}
+
+/// macOS: remove every pending WKWebsiteDataStore, forget the ones that went.
+#[cfg(target_os = "macos")]
+async fn purge_pending_stores(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let ids = state.settings.lock().unwrap().pending_store_deletes.clone();
+    let mut removed = vec![];
+    for id in ids {
+        match app.remove_data_store(*id.as_bytes()).await {
+            Ok(()) => removed.push(id),
+            Err(e) => log::warn!("data store {id} not removed yet: {e}"),
         }
     }
-    Ok(())
+    if removed.is_empty() {
+        return;
+    }
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        s.pending_store_deletes.retain(|id| !removed.contains(id));
+        s.clone()
+    };
+    state.save(&snapshot);
 }
 
 // ---------------------------------------------------------------- entry
@@ -317,14 +371,16 @@ pub fn run() {
         .setup(|app| {
             let path = app.path().app_config_dir()?.join("settings.json");
             #[allow(unused_mut)]
-            let mut s = Settings::load(&path);
+            let (mut s, persist) = Settings::load(&path);
             #[cfg(windows)]
             purge_pending_profiles(app, &mut s);
-            s.save(&path)?;
-            app.manage(AppState {
+            let state = AppState {
                 settings: Mutex::new(s.clone()),
                 path,
-            });
+                persist,
+            };
+            state.save(&s);
+            app.manage(state);
 
             let window = WindowBuilder::new(app, MAIN)
                 .title("Paneful")
@@ -352,6 +408,14 @@ pub fn run() {
                     relayout(&handle);
                 }
             });
+
+            // macOS: retry data stores of removed accounts. Runs once the
+            // event loop is up (remove_data_store hops to the main thread).
+            #[cfg(target_os = "macos")]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move { purge_pending_stores(&handle).await });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

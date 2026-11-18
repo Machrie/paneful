@@ -16,6 +16,20 @@ const ALLOWED: &[&str] = &[
     "apple.com",
 ];
 
+/// Sign-in popups that must open as real popup windows: the provider page
+/// reports back to x.com through `window.opener`, which only exists in a
+/// real popup (추론: confirm with "Google/Apple로 로그인" in M0).
+/// Exact hosts only, https only.
+const AUTH_POPUPS: &[&str] = &["accounts.google.com", "appleid.apple.com"];
+
+pub fn is_auth_popup(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url
+            .host_str()
+            .map(|h| h.trim_end_matches('.').to_ascii_lowercase())
+            .is_some_and(|h| AUTH_POPUPS.contains(&h.as_str()))
+}
+
 pub enum Decision {
     Allow,
     OpenExternal,
@@ -64,5 +78,15 @@ mod tests {
         assert_eq!(d("https://x.com.evil.io/"), "external");
         assert_eq!(d("file:///etc/passwd"), "block");
         assert_eq!(d("about:blank"), "allow");
+    }
+
+    #[test]
+    fn auth_popups() {
+        let p = |s: &str| is_auth_popup(&Url::parse(s).unwrap());
+        assert!(p("https://accounts.google.com/o/oauth2/auth?x=1"));
+        assert!(p("https://appleid.apple.com/auth/authorize"));
+        assert!(!p("http://accounts.google.com/"));
+        assert!(!p("https://evil.accounts.google.com/"));
+        assert!(!p("https://x.com/"));
     }
 }

@@ -45,6 +45,20 @@ pub struct Settings {
     /// exists (the runtime keeps the folder locked while running).
     #[serde(default)]
     pub pending_profile_deletes: Vec<String>,
+    /// macOS only: WKWebsiteDataStores whose removal failed (or hasn't run
+    /// yet). Retried on every start until it succeeds.
+    #[serde(default)]
+    pub pending_store_deletes: Vec<Uuid>,
+}
+
+/// Whether settings.json may be written back after `load`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Persist {
+    /// File missing, fine, or recovered: saving is safe.
+    Yes,
+    /// File exists but could not be read (permissions, locked, ...).
+    /// Saving would overwrite data we never saw, so don't.
+    No,
 }
 
 pub const COLORS: [&str; 6] = ["#1d9bf0", "#f91880", "#00ba7c", "#ffd400", "#7856ff", "#ff7a00"];
@@ -59,26 +73,66 @@ impl Default for Settings {
             ],
             ratios: vec![1.0, 1.0],
             pending_profile_deletes: vec![],
+            pending_store_deletes: vec![],
         }
     }
 }
 
 impl Settings {
-    pub fn load(path: &Path) -> Self {
-        let mut s = match fs::read_to_string(path) {
+    pub fn load(path: &Path) -> (Self, Persist) {
+        let (mut s, persist) = match fs::read_to_string(path) {
             Ok(text) => match serde_json::from_str::<Settings>(&text) {
-                Ok(s) => s,
+                Ok(s) => (s, Persist::Yes),
                 Err(e) => {
-                    log::warn!("settings.json unreadable ({e}), keeping a backup and using defaults");
                     let _ = fs::copy(path, path.with_extension("json.bak"));
-                    Settings::default()
+                    match Self::salvage(&text) {
+                        Some(s) => {
+                            log::warn!("settings.json damaged ({e}), backup kept, accounts recovered");
+                            (s, Persist::Yes)
+                        }
+                        None => {
+                            log::warn!("settings.json unreadable ({e}), backup kept, using defaults");
+                            (Settings::default(), Persist::Yes)
+                        }
+                    }
                 }
             },
-            Err(_) => Settings::default(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => (Settings::default(), Persist::Yes),
+            Err(e) => {
+                log::error!("cannot read settings.json ({e}); running on defaults without saving");
+                (Settings::default(), Persist::No)
+            }
         };
         s.migrate();
         s.fix_ratios();
-        s
+        (s, persist)
+    }
+
+    /// Valid JSON with a bad field somewhere: keep every account that still
+    /// parses, so their ids (= login data stores) are not orphaned.
+    fn salvage(text: &str) -> Option<Self> {
+        let v: serde_json::Value = serde_json::from_str(text).ok()?;
+        let accounts: Vec<Account> = v
+            .get("accounts")?
+            .as_array()?
+            .iter()
+            .filter_map(|a| serde_json::from_value(a.clone()).ok())
+            .collect();
+        if accounts.is_empty() {
+            return None;
+        }
+        fn field<T: serde::de::DeserializeOwned + Default>(v: &serde_json::Value, k: &str) -> T {
+            v.get(k)
+                .and_then(|x| serde_json::from_value(x.clone()).ok())
+                .unwrap_or_default()
+        }
+        Some(Settings {
+            version: SETTINGS_VERSION,
+            accounts,
+            ratios: field(&v, "ratios"),
+            pending_profile_deletes: field(&v, "pending_profile_deletes"),
+            pending_store_deletes: field(&v, "pending_store_deletes"),
+        })
     }
 
     fn migrate(&mut self) {
@@ -139,8 +193,36 @@ mod tests {
         let path = dir.join("settings.json");
         let s = Settings::default();
         s.save(&path).unwrap();
-        let l = Settings::load(&path);
+        let (l, persist) = Settings::load(&path);
+        assert_eq!(persist, Persist::Yes);
         assert_eq!(l.accounts[0].id, s.accounts[0].id);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn salvage_keeps_accounts() {
+        let dir = std::env::temp_dir().join(format!("paneful-test-{}", Uuid::new_v4()));
+        let path = dir.join("settings.json");
+        let s = Settings::default();
+        let mut v = serde_json::to_value(&s).unwrap();
+        v["ratios"] = serde_json::json!("broken");
+        v["accounts"].as_array_mut().unwrap().push(serde_json::json!({"id": "nope"}));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, v.to_string()).unwrap();
+        let (l, persist) = Settings::load(&path);
+        assert_eq!(persist, Persist::Yes);
+        assert_eq!(l.accounts.len(), 2);
+        assert_eq!(l.accounts[1].id, s.accounts[1].id);
+        assert_eq!(l.ratios.len(), 2);
+        assert!(path.with_extension("json.bak").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn missing_file_is_writable() {
+        let path = std::env::temp_dir().join(format!("paneful-missing-{}.json", Uuid::new_v4()));
+        let (s, persist) = Settings::load(&path);
+        assert_eq!(persist, Persist::Yes);
+        assert_eq!(s.accounts.len(), 2);
     }
 }
