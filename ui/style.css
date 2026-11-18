@@ -1,0 +1,20 @@
+:root { --bg: #0f1419; --fg: #e7e9ea; --muted: #71767b; --line: #2f3336; }
+@media (prefers-color-scheme: light) {
+  :root { --bg: #f7f9f9; --fg: #0f1419; --muted: #536471; --line: #cfd9de; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+  font: 13px/1 system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  overflow: hidden; user-select: none; -webkit-user-select: none; }
+#bar { position: fixed; inset: 0 0 auto 0; height: 36px; display: flex; align-items: center;
+  justify-content: space-between; padding: 0 8px; border-bottom: 1px solid var(--line); }
+#tabs { position: relative; flex: 1; height: 100%; }
+.tab { position: absolute; top: 0; height: 100%; display: flex; align-items: center; gap: 6px;
+  padding: 0 8px; overflow: hidden; white-space: nowrap; }
+.tab .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.tab button, .actions button { background: none; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 4px; padding: 3px 6px; cursor: pointer; font: inherit; }
+.tab button:hover, .actions button:hover { color: var(--fg); }
+.divider { position: fixed; top: 36px; bottom: 0; cursor: col-resize; }
+.divider::after { content: ""; position: absolute; inset: 0 2px; background: var(--line); border-radius: 1px; }
+.divider:hover::after, .divider.drag::after { background: #1d9bf0; }

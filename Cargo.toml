@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["src-tauri"]
+exclude = ["crates/tauri-runtime-wry"]
+
+# Windows account isolation: tauri-runtime-wry patched so that
+# `data_store_identifier` becomes a WebView2 profile name on Windows.
+# Remove once upstream tauri-apps/tauri#16054 (or its successor) ships.
+[patch.crates-io]
+tauri-runtime-wry = { path = "crates/tauri-runtime-wry" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

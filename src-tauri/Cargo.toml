@@ -1,0 +1,33 @@
+[package]
+name = "paneful"
+version = "0.0.1"
+edition = "2021"
+description = "Lightweight split-pane desktop client for x.com with isolated accounts"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "paneful_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.6", features = [] }
+
+[dependencies]
+# Multi-webview in one window (WindowBuilder / WebviewBuilder / add_child)
+# needs `unstable`. Pinned exactly: unstable APIs may break on minor bumps.
+tauri = { version = "=2.12.7", features = ["unstable"] }
+# Must match the vendored crate in crates/tauri-runtime-wry.
+tauri-runtime-wry = "=2.12.5"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+url = "2"
+log = "0.4"
+tauri-plugin-log = "2"
+
+[target.'cfg(windows)'.dependencies]
+# Same versions tauri-runtime-wry 2.12.5 uses; only for the M0 profile check.
+webview2-com = "0.39"
+windows = { version = "0.62", features = ["Win32_Foundation"] }
