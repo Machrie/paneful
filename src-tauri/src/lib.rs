@@ -6,6 +6,7 @@
 //!   WebView2 profile name, so all panels share one WebView2 runtime.
 
 mod layout;
+mod media;
 mod nav;
 mod settings;
 
@@ -125,6 +126,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect) 
 
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(START_URL.parse().unwrap()))
         .data_store_identifier(acc.store_id())
+        .initialization_script(media::SCRIPT)
         .on_navigation(move |url| match nav::decide(url) {
             nav::Decision::Allow => true,
             nav::Decision::OpenExternal => {
@@ -144,6 +146,11 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect) 
         // popups (they need window.opener). Other allowed hosts load in the
         // same panel, everything else goes to the system browser.
         .on_new_window(move |url, _features| {
+            // "원본 저장" button in the panel (see media.rs).
+            if media::is_trigger(&url) {
+                media::handle(app2.clone(), label2.clone(), url);
+                return NewWindowResponse::Deny;
+            }
             if nav::is_auth_popup(&url) {
                 // Same WebView2 profile / WKWebViewConfiguration as the panel,
                 // so the login lands in this account's store.
