@@ -1,8 +1,8 @@
 name: build
 
 on:
+  # No build on pushes to main: PRs are built, and a v* tag builds the release.
   push:
-    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -44,6 +44,23 @@ jobs:
         with:
           name: paneful-${{ matrix.os }}
           path: ${{ matrix.artifact }}
+          if-no-files-found: error
+      # Windows portable: the bare exe (UI is embedded, WebView2 loader is
+      # linked statically) zipped up. Needs the WebView2 runtime on the PC.
+      - name: portable zip
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ver = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force portable | Out-Null
+          Copy-Item target/release/paneful.exe portable/Paneful.exe
+          Copy-Item LICENSE portable/LICENSE.txt
+          Compress-Archive -Path portable/* -DestinationPath "Paneful_${ver}_x64-portable.zip"
+      - if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: paneful-windows-portable
+          path: Paneful_*_x64-portable.zip
           if-no-files-found: error
 
   # Tag push (v*): attach the installers to a public GitHub Release so people
