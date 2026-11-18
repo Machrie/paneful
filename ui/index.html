@@ -7,14 +7,36 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header id="bar">
+  <div id="strip"></div>
+  <header id="bar" hidden>
     <div id="tabs"></div>
     <div class="actions">
       <span id="status" role="alert" hidden></span>
-      <button id="add" title="계정 추가">＋ 계정</button>
+      <button id="add" class="pill" title="계정 추가">＋ 계정</button>
+      <button id="help" class="icon" data-icon="keyboard"></button>
+      <button id="hide" class="icon" data-icon="chevronUp"></button>
     </div>
   </header>
   <div id="dividers"></div>
+  <div id="overlay" hidden>
+    <div class="sheet" role="dialog" aria-label="단축키">
+      <div class="sheet-head">
+        <h1>단축키</h1>
+        <button id="close" class="icon" data-icon="close" title="닫기 (Esc)"></button>
+      </div>
+      <div class="cols">
+        <section>
+          <h2>Paneful</h2>
+          <dl id="app-keys"></dl>
+        </section>
+        <section>
+          <h2>X <span class="sub">활성 패널에서</span></h2>
+          <dl id="x-keys"></dl>
+        </section>
+      </div>
+      <p class="foot">X 단축키는 색 표시된 활성 패널에서 동작 · 패널을 클릭해도 전환 · 닫기 <kbd>Esc</kbd></p>
+    </div>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>

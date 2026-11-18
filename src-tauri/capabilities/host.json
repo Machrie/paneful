@@ -1,11 +1,18 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "host",
-  "description": "Only the local host UI webview may call app commands. x.com panels get no IPC.",
+  "description": "The local host UI webview: all app commands.",
   "webviews": [
     "host"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "allow-refresh-layout",
+    "allow-set-ratios",
+    "allow-commit-layout",
+    "allow-reload-panel",
+    "allow-add-account",
+    "allow-remove-account",
+    "allow-shortcut"
   ]
 }
