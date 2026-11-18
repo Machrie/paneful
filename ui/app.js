@@ -1,17 +1,42 @@
 // Host UI. Runs in the local "host" webview underneath the x.com panels.
-// Panels are native child webviews, so this page only shows through in the
-// top bar and in the gaps between panels; the gaps are the drag handles.
+// Panels are native child webviews, so this page only shows through above
+// the panels (top bar, or a thin strip while the bar is hidden) and in the
+// gaps between panels; the gaps are the drag handles. The shortcut overlay
+// is drawn here too, while Rust keeps the panels hidden.
 // No confirm()/alert(): wry's macOS UI delegate doesn't implement them
 // (confirm() always returns false there), so everything is inline.
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-const tabsEl = document.getElementById("tabs");
-const divsEl = document.getElementById("dividers");
-const statusEl = document.getElementById("status");
+const $ = (id) => document.getElementById(id);
+const tabsEl = $("tabs");
+const divsEl = $("dividers");
+const statusEl = $("status");
+const barEl = $("bar");
+const stripEl = $("strip");
+const overlayEl = $("overlay");
+
+const mac = /Mac/.test(navigator.platform || navigator.userAgent);
+const MOD = mac ? "⌘" : "Ctrl";
 
 let L = null; // last layout payload from Rust
 let shape = ""; // panel ids/labels/colors the DOM was built for
+
+// Static, trusted markup only.
+const ICONS = {
+  reload: '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
+  trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
+  keyboard: '<svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9"/></svg>',
+  chevronUp: '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>',
+  close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+};
+function setIcon(el, name) {
+  el.innerHTML = ICONS[name];
+}
+document.querySelectorAll("[data-icon]").forEach((el) => setIcon(el, el.dataset.icon));
+$("help").title = `단축키 (${MOD}+/)`;
+$("hide").title = `상단 바 숨기기 (${MOD}+Shift+H)`;
+stripEl.title = `클릭 또는 ${MOD}+Shift+H: 상단 바 표시 · ${MOD}+/: 단축키`;
 
 function showError(e) {
   statusEl.textContent = String(e);
@@ -20,8 +45,18 @@ function showError(e) {
   showError.timer = setTimeout(() => (statusEl.hidden = true), 8000);
 }
 
-function button(text, onclick) {
+function iconButton(icon, title, onclick) {
   const b = document.createElement("button");
+  b.className = "icon";
+  b.title = title;
+  setIcon(b, icon);
+  b.onclick = onclick;
+  return b;
+}
+
+function pill(text, onclick) {
+  const b = document.createElement("button");
+  b.className = "pill";
   b.textContent = text;
   b.onclick = onclick;
   return b;
@@ -32,6 +67,10 @@ function button(text, onclick) {
 // the divider being dragged keeps its pointer capture.
 function render() {
   if (!L) return;
+  barEl.hidden = !L.bar;
+  stripEl.hidden = L.bar;
+  overlayEl.hidden = !L.help;
+  document.documentElement.style.setProperty("--top", `${L.top}px`);
   const s = L.panels.map((p) => `${p.id}\u0000${p.label}\u0000${p.color}`).join("\u0001");
   if (s !== shape) {
     shape = s;
@@ -43,15 +82,30 @@ function render() {
 function build() {
   tabsEl.replaceChildren();
   divsEl.replaceChildren();
+  stripEl.replaceChildren();
   L.panels.forEach((p, i) => {
+    const seg = document.createElement("div");
+    seg.className = "seg";
+    seg.style.setProperty("--c", p.color);
+    stripEl.append(seg);
+
     const t = document.createElement("div");
     t.className = "tab";
+    t.style.setProperty("--c", p.color);
+    // Clicking the tab itself (not its buttons) focuses that panel.
+    t.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      e.stopPropagation();
+      invoke("shortcut", { action: "focus", index: i }).catch(showError);
+    });
     const dot = document.createElement("span");
     dot.className = "dot";
-    dot.style.background = p.color;
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = p.label;
+    const key = document.createElement("span");
+    key.className = "key";
+    if (i < 9) key.textContent = `${MOD} ${i + 1}`;
 
     const normal = document.createElement("span");
     normal.className = "group";
@@ -59,12 +113,14 @@ function build() {
     ask.className = "group ask";
     ask.hidden = true;
 
+    const del = iconButton("trash", "계정 삭제", () => {
+      normal.hidden = true;
+      ask.hidden = false;
+    });
+    del.classList.add("danger");
     normal.append(
-      button("새로고침", () => invoke("reload_panel", { id: p.id }).catch(showError)),
-      button("삭제", () => {
-        normal.hidden = true;
-        ask.hidden = false;
-      }),
+      iconButton("reload", "새로고침", () => invoke("reload_panel", { id: p.id }).catch(showError)),
+      del,
     );
     const cancel = () => {
       ask.hidden = true;
@@ -73,7 +129,7 @@ function build() {
     const msg = document.createElement("span");
     msg.className = "warn";
     msg.textContent = "로그인·쿠키까지 지움";
-    const yes = button("삭제", async () => {
+    const yes = pill("삭제", async () => {
       yes.disabled = true;
       try {
         await invoke("remove_account", { id: p.id });
@@ -83,10 +139,10 @@ function build() {
         cancel();
       }
     });
-    yes.className = "danger";
-    ask.append(msg, yes, button("취소", cancel));
+    yes.classList.add("danger");
+    ask.append(msg, yes, pill("취소", cancel));
 
-    t.append(dot, name, normal, ask);
+    t.append(dot, name, key, normal, ask);
     tabsEl.append(t);
 
     if (i < L.panels.length - 1) {
@@ -104,6 +160,11 @@ function place() {
     const t = tabsEl.children[i];
     t.style.left = `${p.rect.x - pad}px`;
     t.style.width = `${p.rect.w}px`;
+    t.classList.toggle("active", p.active);
+    const seg = stripEl.children[i];
+    seg.style.left = `${p.rect.x}px`;
+    seg.style.width = `${p.rect.w}px`;
+    seg.classList.toggle("active", p.active);
     const d = divsEl.children[i];
     if (d) {
       d.style.left = `${p.rect.x + p.rect.w}px`;
@@ -177,7 +238,109 @@ function startDrag(e, el, i) {
   el.addEventListener("lostpointercapture", end);
 }
 
-document.getElementById("add").onclick = () => invoke("add_account").catch(showError);
+// ---- shortcut overlay
+// App shortcuts: same mapping as keyOf() below and src-tauri/src/panel.js.
+const APP_KEYS = [
+  [[MOD, "1–9"], "N번째 패널로 포커스"],
+  [["Ctrl", "Tab"], "다음 패널"],
+  [["Ctrl", "Shift", "Tab"], "이전 패널"],
+  [[MOD, "Shift", "H"], "상단 바 보이기/숨기기"],
+  [[MOD, "/"], "이 단축키 창"],
+];
+// X's own shortcuts, only the ones that agree across several public lists
+// (X has no current official page for them). Work in the focused panel.
+// `then` = press one key, release, then the next (g then h).
+const X_KEYS = [
+  [["j"], "다음 게시물"],
+  [["k"], "이전 게시물"],
+  [["Space"], "아래로 스크롤"],
+  [["."], "새 게시물 불러오기"],
+  [["Enter"], "게시물 열기"],
+  [["l"], "마음에 들어요"],
+  [["r"], "답글"],
+  [["t"], "재게시"],
+  [["n"], "새 게시물"],
+  [[mac ? "⌘" : "Ctrl", "Enter"], "게시하기"],
+  [["/"], "검색"],
+  [["m"], "쪽지"],
+  [["g", "then", "h"], "홈"],
+  [["g", "then", "n"], "알림"],
+  [["g", "then", "p"], "내 프로필"],
+  [["g", "then", "b"], "북마크"],
+  [["g", "then", "m"], "쪽지함"],
+  [["?"], "X 전체 단축키 목록"],
+];
+function fillKeys(dl, rows) {
+  for (const [keys, label] of rows) {
+    const dt = document.createElement("dt");
+    keys.forEach((k, i) => {
+      if (k === "then") {
+        const s = document.createElement("span");
+        s.className = "then";
+        s.textContent = "→";
+        dt.append(s);
+        return;
+      }
+      const kbd = document.createElement("kbd");
+      kbd.textContent = k;
+      dt.append(kbd);
+    });
+    const dd = document.createElement("dd");
+    dd.textContent = label;
+    dl.append(dt, dd);
+  }
+}
+fillKeys($("app-keys"), APP_KEYS);
+fillKeys($("x-keys"), X_KEYS);
+const toggleHelp = () => invoke("shortcut", { action: "help" }).catch(showError);
+$("help").onclick = toggleHelp;
+$("close").onclick = (e) => {
+  e.stopPropagation();
+  toggleHelp();
+};
+overlayEl.addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (e.target === overlayEl) toggleHelp();
+});
+
+$("add").onclick = () => invoke("add_account").catch(showError);
+const toggleBar = () => invoke("shortcut", { action: "bar" }).catch(showError);
+$("hide").onclick = toggleBar;
+stripEl.onclick = toggleBar;
+
+// Any click up here leaves keyboard focus on the active panel, so X's own
+// shortcuts keep working without clicking back into it. Runs after the
+// button handlers (bubble phase on document).
+document.addEventListener("click", (e) => {
+  if (e.target.closest("#help")) return; // opening the overlay keeps focus here
+  if (L && L.panels.length && !L.help) invoke("shortcut", { action: "refocus" }).catch(() => {});
+});
+
+// Same mapping as src-tauri/src/panel.js, for when this UI has focus.
+// e.code, not e.key: stays the same under the Korean IME.
+function keyOf(e) {
+  const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+  if (e.altKey) return null;
+  if (mod && !e.shiftKey && /^Digit[1-9]$/.test(e.code)) {
+    return { action: "focus", index: Number(e.code.slice(5)) - 1 };
+  }
+  if (e.ctrlKey && !e.metaKey && e.code === "Tab") return { action: e.shiftKey ? "prev" : "next" };
+  if (mod && e.shiftKey && e.code === "KeyH") return { action: "bar" };
+  if (mod && !e.shiftKey && e.code === "Slash") return { action: "help" };
+  if (L && L.help && e.code === "Escape") return { action: "help" };
+  return null;
+}
+window.addEventListener(
+  "keydown",
+  (e) => {
+    const a = keyOf(e);
+    if (!a) return;
+    e.preventDefault();
+    if (e.repeat && (a.action === "bar" || a.action === "help")) return;
+    invoke("shortcut", a).catch(showError);
+  },
+  true,
+);
 
 listen("layout", (ev) => {
   L = ev.payload;

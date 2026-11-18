@@ -49,6 +49,10 @@ pub struct Settings {
     /// yet). Retried on every start until it succeeds.
     #[serde(default)]
     pub pending_store_deletes: Vec<Uuid>,
+    /// Top bar (account names, reload/delete, + account) shown. Hidden by
+    /// default; Ctrl/Cmd+Shift+H or a click on the top strip shows it.
+    #[serde(default)]
+    pub show_bar: bool,
 }
 
 /// Whether settings.json may be written back after `load`.
@@ -74,6 +78,7 @@ impl Default for Settings {
             ratios: vec![1.0, 1.0],
             pending_profile_deletes: vec![],
             pending_store_deletes: vec![],
+            show_bar: false,
         }
     }
 }
@@ -132,6 +137,7 @@ impl Settings {
             ratios: field(&v, "ratios"),
             pending_profile_deletes: field(&v, "pending_profile_deletes"),
             pending_store_deletes: field(&v, "pending_store_deletes"),
+            show_bar: field(&v, "show_bar"),
         })
     }
 
