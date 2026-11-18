@@ -21,6 +21,7 @@ const MOD = mac ? "⌘" : "Ctrl";
 
 let L = null; // last layout payload from Rust
 let shape = ""; // panel ids/labels/colors the DOM was built for
+let hotkeyShown = false; // global shortcut added to the overlay / tooltips
 
 // Static, trusted markup only.
 const ICONS = {
@@ -28,6 +29,7 @@ const ICONS = {
   trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
   keyboard: '<svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9"/></svg>',
   chevronUp: '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>',
+  eyeOff: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c5 0 9 4.5 10 7a13 13 0 0 1-2.9 3.9M6.6 6.6C4.3 8 2.6 10.2 2 12c1 2.5 5 7 10 7a9.6 9.6 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
 };
 function setIcon(el, name) {
@@ -36,6 +38,7 @@ function setIcon(el, name) {
 document.querySelectorAll("[data-icon]").forEach((el) => setIcon(el, el.dataset.icon));
 $("help").title = `단축키 (${MOD}+/)`;
 $("hide").title = `상단 바 숨기기 (${MOD}+Shift+H)`;
+$("tray").title = "창을 트레이로 숨기기";
 stripEl.title = `클릭 또는 ${MOD}+Shift+H: 상단 바 표시 · ${MOD}+/: 단축키`;
 
 function showError(e) {
@@ -72,6 +75,10 @@ function render() {
   overlayEl.hidden = !L.help;
   document.documentElement.style.setProperty("--top", `${L.top}px`);
   const s = L.panels.map((p) => `${p.id}\u0000${p.label}\u0000${p.color}`).join("\u0001");
+  if (!hotkeyShown) {
+    hotkeyShown = true;
+    showHotkey();
+  }
   if (s !== shape) {
     shape = s;
     build();
@@ -291,6 +298,23 @@ function fillKeys(dl, rows) {
   }
 }
 fillKeys($("app-keys"), APP_KEYS);
+// Global show/hide shortcut: comes from settings.json via Rust, so it is
+// added on the first layout. Works from any app, not only in Paneful.
+function showHotkey() {
+  const dl = $("app-keys");
+  if (L.hotkey.length) {
+    fillKeys(dl, [[L.hotkey, "창 숨기기/불러오기 (전역)"]]);
+    $("tray").title = `창을 트레이로 숨기기 (${L.hotkey.join("+")})`;
+  } else {
+    const dt = document.createElement("dt");
+    dt.textContent = "전역 단축키";
+    const dd = document.createElement("dd");
+    dd.className = "warn";
+    dd.textContent = L.hotkey_error || "꺼짐 (settings.json)";
+    dl.append(dt, dd);
+  }
+  if (L.hotkey_error) showError(L.hotkey_error);
+}
 fillKeys($("x-keys"), X_KEYS);
 const toggleHelp = () => invoke("shortcut", { action: "help" }).catch(showError);
 $("help").onclick = toggleHelp;
@@ -304,6 +328,7 @@ overlayEl.addEventListener("click", (e) => {
 });
 
 $("add").onclick = () => invoke("add_account").catch(showError);
+$("tray").onclick = () => invoke("shortcut", { action: "tray" }).catch(showError);
 const toggleBar = () => invoke("shortcut", { action: "bar" }).catch(showError);
 $("hide").onclick = toggleBar;
 stripEl.onclick = toggleBar;
@@ -312,7 +337,7 @@ stripEl.onclick = toggleBar;
 // shortcuts keep working without clicking back into it. Runs after the
 // button handlers (bubble phase on document).
 document.addEventListener("click", (e) => {
-  if (e.target.closest("#help")) return; // opening the overlay keeps focus here
+  if (e.target.closest("#help, #tray")) return; // overlay keeps focus here; tray hides the window
   if (L && L.panels.length && !L.help) invoke("shortcut", { action: "refocus" }).catch(() => {});
 });
 

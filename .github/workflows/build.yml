@@ -1,8 +1,8 @@
 name: build
 
 on:
+  # No build on pushes to main: PRs are built, and a v* tag builds the release.
   push:
-    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:

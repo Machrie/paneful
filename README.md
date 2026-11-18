@@ -65,6 +65,7 @@ x.com 전용 경량 데스크톱 앱. 한 창에 x.com 패널을 나란히 띄�
    - **＋ 계정**: 패널 추가
    - 탭에 마우스를 올리면 나오는 **새로고침**: 그 패널만 새로 고침
    - 탭에 마우스를 올리면 나오는 **휴지통**: 패널을 닫고 그 계정의 로그인 정보(쿠키·저장소)까지 지운다. 확인을 한 번 더 묻는다. 다시 추가하면 로그아웃된 새 패널로 시작한다
+   - **눈 가림 버튼**: 창을 트레이로 숨기기 (아래 [트레이로 숨기기](#트레이로-숨기기))
    - **키보드 버튼**: 단축키 목록
 
 ### 단축키
@@ -77,6 +78,7 @@ macOS에선 `Ctrl` 대신 `⌘`를 쓴다. 패널 전환의 `Ctrl+Tab`만 맥에
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 다음 / 이전 패널 |
 | `Ctrl+Shift+H` | 상단 바 보이기 / 숨기기 |
 | `Ctrl+/` | 단축키 목록 (`Esc`로 닫기) |
+| `Ctrl+Alt+X` (맥 `⌘⌥X`) | 창 숨기기 / 불러오기. 다른 앱이 앞에 있어도 동작 |
 
 x.com 자체 단축키(`j`/`k` 이동, `l` 좋아요, `n` 새 게시물 등)는 활성 패널에 그대로 먹힌다. 바의 버튼을 눌러도 키보드 포커스는 활성 패널로 돌아간다. 전체 목록은 패널에서 `?`.
 
@@ -89,6 +91,14 @@ x.com 자체 단축키(`j`/`k` 이동, `l` 좋아요, `n` 새 게시물 등)는 
 - 동영상에서 "새로고침 후 다시"가 뜨면 그 패널을 새로 고친 뒤 다시 누른다
 - 비공개 계정의 미디어는 저장이 안 될 수 있다
 - 받은 파일의 저작권은 원작자에게 있다
+
+### 트레이로 숨기기
+
+- 상단 바의 **눈 가림** 버튼이나 전역 단축키로 창을 숨긴다. 숨기면 작업 표시줄·Alt+Tab(Windows), Dock·Cmd+Tab(macOS)에서도 사라지고 트레이(macOS는 메뉴 막대) 아이콘만 남는다
+- 다시 띄우기: 전역 단축키, 또는 트레이 아이콘 클릭(Windows) / 메뉴 막대 아이콘 → **Paneful 보이기/숨기기**(macOS)
+- 전역 단축키 기본값은 Windows `Ctrl+Alt+X`, macOS `⌘⌥X`. 다른 앱이 앞에 있어도 먹는다. Paneful이 앞에 있으면 숨기고, 숨겨져 있거나 뒤에 있으면 앞으로 불러온다
+- 단축키를 바꾸려면 앱을 끄고 설정 폴더의 `settings.json`에 `"hotkey": "CommandOrControl+Shift+F12"`처럼 넣는다(Tauri 단축키 표기). `""`이면 끈다. 다른 앱이 이미 잡고 있으면 등록이 실패하고 단축키 창(`Ctrl+/`)에 이유가 뜬다
+- 트레이 메뉴의 **종료**로 완전히 끈다. 창의 닫기(X) 버튼은 지금처럼 앱을 끈다
 
 ## 제거
 
@@ -133,7 +143,8 @@ npx @tauri-apps/cli@2 build           # 설치 파일 (Windows: NSIS .exe, macOS
   - macOS 14+: `data_store_identifier` → `WKWebsiteDataStore(forIdentifier:)`
   - Windows: 같은 호출을 `crates/tauri-runtime-wry` 패치가 WebView2 프로필 이름(UUID hex)으로 바꾼다. 런타임 하나를 공유한다 (업스트림 tauri-apps/tauri#16054 와 같은 방식). 자세한 건 `crates/tauri-runtime-wry/PANEFUL_PATCH.md`
 - 내비게이션 허용 목록(`src-tauri/src/nav.rs`) 밖 링크는 시스템 브라우저로
-- 설정은 `settings.json` (앱 설정 폴더)
+- 설정은 `settings.json` (앱 설정 폴더: Windows `%APPDATA%\dev.machrie.paneful`, macOS `~/Library/Application Support/dev.machrie.paneful`)
+- 트레이·전역 단축키는 `src-tauri/src/tray.rs` (`tray-icon` 피처, `tauri-plugin-global-shortcut`)
 - 패널 주입 스크립트
   - `src-tauri/src/panel.js`: 포커스 보고와 앱 단축키만. `panel` capability로 `panel_focused`, `shortcut` 두 커맨드만 허용
   - `src-tauri/src/media.js` + `media.rs`: 원본 저장 버튼. 패널엔 IPC 없이 `window.open` 트리거를 `on_new_window`가 가로채고, Rust가 twimg 주소를 검증한 뒤 쿠키 없이 받는다
@@ -142,7 +153,7 @@ M0 스파이크 검증 체크표는 [docs/m0-checklist.md](docs/m0-checklist.md)
 
 ### CI와 릴리스
 
-`.github/workflows/build.yml`이 push·PR마다 Windows·macOS 설치 파일을 빌드해 Actions 아티팩트로 올린다 (받으려면 GitHub 로그인 필요, 기한 있음).
+`.github/workflows/build.yml`이 PR마다(그리고 Actions 탭에서 수동 실행 시) Windows·macOS 설치 파일을 빌드해 Actions 아티팩트로 올린다 (받으려면 GitHub 로그인 필요, 기한 있음). main 푸시엔 빌드하지 않는다. 같은 브랜치에 새로 푸시하면 이전 실행은 취소된다.
 
 `v`로 시작하는 태그를 push하면 같은 빌드 결과로 GitHub Release를 만들어 설치 파일을 붙인다. 태그는 `src-tauri/tauri.conf.json`의 `version`과 맞춘다.
 
