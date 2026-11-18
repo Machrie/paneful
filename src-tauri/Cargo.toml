@@ -16,7 +16,8 @@ tauri-build = { version = "=2.7.6", features = [] }
 [dependencies]
 # Multi-webview in one window (WindowBuilder / WebviewBuilder / add_child)
 # needs `unstable`. Pinned exactly: unstable APIs may break on minor bumps.
-tauri = { version = "=2.12.7", features = ["unstable"] }
+# `tray-icon`: hide the window to the tray / menu bar.
+tauri = { version = "=2.12.7", features = ["unstable", "tray-icon"] }
 # Must match the vendored crate in crates/tauri-runtime-wry.
 tauri-runtime-wry = "=2.12.5"
 tauri-plugin-opener = "2"
@@ -29,6 +30,8 @@ tauri-plugin-log = "2"
 # "원본 저장": cookie-less download of one twimg file. OS TLS (SChannel /
 # Security.framework), no extra crypto crates.
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "http2"] }
+# Show/hide toggle that works while another app has focus.
+tauri-plugin-global-shortcut = "2"
 
 [target.'cfg(windows)'.dependencies]
 # Same versions tauri-runtime-wry 2.12.5 uses; only for the M0 profile check.

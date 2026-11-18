@@ -9,6 +9,7 @@ mod layout;
 mod media;
 mod nav;
 mod settings;
+mod tray;
 
 use serde::Serialize;
 use settings::{Account, Persist, Settings, COLORS};
@@ -22,7 +23,7 @@ use tauri::{
 };
 use tauri_plugin_opener::OpenerExt;
 
-const MAIN: &str = "main";
+pub(crate) const MAIN: &str = "main";
 const HOST: &str = "host";
 const START_URL: &str = "https://x.com/home";
 /// Injected into every panel's main frame: reports focus and the app's own
@@ -35,6 +36,10 @@ struct AppState {
     active: Mutex<Option<Uuid>>,
     /// Shortcut overlay open: panels are hidden so the host UI can draw it.
     help: Mutex<bool>,
+    /// Global show/hide shortcut as registered (None: off or failed).
+    hotkey: Option<String>,
+    /// Why the shortcut isn't registered, shown once in the host UI.
+    hotkey_error: Option<String>,
     path: PathBuf,
     persist: Persist,
 }
@@ -77,6 +82,9 @@ struct LayoutPayload {
     min_panel: f64,
     ratios: Vec<f64>,
     panels: Vec<PanelView>,
+    /// Global show/hide shortcut, as key caps for the overlay. Empty: none.
+    hotkey: Vec<String>,
+    hotkey_error: Option<String>,
 }
 
 /// Bar is forced on with no accounts, otherwise "+ 계정" would be unreachable
@@ -150,6 +158,8 @@ fn relayout<R: Runtime>(app: &AppHandle<R>) {
         min_panel: layout::MIN_PANEL,
         ratios: s.ratios.clone(),
         panels,
+        hotkey: state.hotkey.as_deref().map(tray::keys).unwrap_or_default(),
+        hotkey_error: state.hotkey_error.clone(),
     };
     let _ = app.emit_to(HOST, "layout", payload);
 }
@@ -308,7 +318,7 @@ async fn commit_layout(app: AppHandle, state: State<'_, AppState>, ratios: Vec<f
 
 /// Give keyboard focus to the panel of `id`, so X's own shortcuts (j/k/...)
 /// go there, and mark it active right away (its focus report follows).
-fn focus_account(app: &AppHandle, id: Uuid) {
+fn focus_account<R: Runtime>(app: &AppHandle<R>, id: Uuid) {
     let state = app.state::<AppState>();
     let label = format!("panel-{}", id.simple());
     if let Some(wv) = app.get_webview(&label) {
@@ -317,6 +327,14 @@ fn focus_account(app: &AppHandle, id: Uuid) {
     let changed = state.active.lock().unwrap().replace(id) != Some(id);
     if changed {
         relayout(app);
+    }
+}
+
+/// Keyboard focus to the active panel (after the window is shown again).
+fn refocus_active<R: Runtime>(app: &AppHandle<R>) {
+    let id = *app.state::<AppState>().active.lock().unwrap();
+    if let Some(id) = id {
+        focus_account(app, id);
     }
 }
 
@@ -346,6 +364,7 @@ async fn panel_focused(app: AppHandle, state: State<'_, AppState>, webview: Webv
 /// - `bar`: Ctrl/Cmd+Shift+H, show/hide the top bar
 /// - `help`: Ctrl/Cmd+/, open/close the shortcut overlay
 /// - `refocus`: host UI was clicked, hand focus back to the active panel
+/// - `tray`: hide the window to the tray (top bar button)
 #[tauri::command]
 async fn shortcut(
     app: AppHandle,
@@ -367,6 +386,10 @@ async fn shortcut(
         } else if let Some(id) = *state.active.lock().unwrap() {
             focus_account(&app, id);
         }
+        return Ok(());
+    }
+    if action == "tray" {
+        tray::hide(&app);
         return Ok(());
     }
     // Any other shortcut closes the overlay.
@@ -511,6 +534,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(tray::on_shortcut)
+                .build(),
+        )
+        .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
                 .targets([
@@ -527,10 +555,19 @@ pub fn run() {
             let (mut s, persist) = Settings::load(&path);
             #[cfg(windows)]
             purge_pending_profiles(app, &mut s);
+            let (hotkey, hotkey_error) = match tray::register(app.handle(), s.hotkey()) {
+                Ok(k) => (k, None),
+                Err(e) => {
+                    log::warn!("{e}");
+                    (None, Some(e))
+                }
+            };
             let state = AppState {
                 settings: Mutex::new(s.clone()),
                 active: Mutex::new(s.accounts.first().map(|a| a.id)),
                 help: Mutex::new(false),
+                hotkey,
+                hotkey_error,
                 path,
                 persist,
             };
@@ -546,6 +583,11 @@ pub fn run() {
                 .theme(Some(tauri::Theme::Dark))
                 .build()?;
             let (w, h) = logical_size(&window);
+            // Not fatal: without a tray icon the app still works, it just
+            // can't be hidden from the top bar button (see tray::hide).
+            if let Err(e) = tray::create(app.handle(), app.state::<AppState>().hotkey.as_deref()) {
+                log::error!("tray icon failed: {e}");
+            }
 
             // Host UI first so the panels stack above it; it stays visible
             // in the top bar and in the gaps between panels.
