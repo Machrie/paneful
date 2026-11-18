@@ -27,6 +27,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
 log = "0.4"
 tauri-plugin-log = "2"
+# "원본 저장": cookie-less download of one twimg file. OS TLS (SChannel /
+# Security.framework), no extra crypto crates.
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "http2"] }
 # Show/hide toggle that works while another app has focus.
 tauri-plugin-global-shortcut = "2"
 
