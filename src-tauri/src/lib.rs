@@ -13,20 +13,28 @@ mod settings;
 use serde::Serialize;
 use settings::{Account, Persist, Settings, COLORS};
 use std::{path::PathBuf, sync::Mutex};
+use uuid::Uuid;
 use tauri::{
     webview::{NewWindowResponse, WebviewBuilder},
     window::WindowBuilder,
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Runtime, State, WebviewUrl, Window,
-    WindowEvent,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Runtime, State, Webview, WebviewUrl,
+    Window, WindowEvent,
 };
 use tauri_plugin_opener::OpenerExt;
 
 const MAIN: &str = "main";
 const HOST: &str = "host";
 const START_URL: &str = "https://x.com/home";
+/// Injected into every panel's main frame: reports focus and the app's own
+/// shortcuts. The panel capability lets x.com reach only those two commands.
+const PANEL_JS: &str = include_str!("panel.js");
 
 struct AppState {
     settings: Mutex<Settings>,
+    /// Account whose panel last had keyboard focus. Not persisted.
+    active: Mutex<Option<Uuid>>,
+    /// Shortcut overlay open: panels are hidden so the host UI can draw it.
+    help: Mutex<bool>,
     path: PathBuf,
     persist: Persist,
 }
@@ -52,6 +60,7 @@ struct PanelView {
     id: String,
     label: String,
     color: String,
+    active: bool,
     rect: layout::Rect,
 }
 
@@ -59,11 +68,29 @@ struct PanelView {
 struct LayoutPayload {
     win_w: f64,
     win_h: f64,
-    top_bar: f64,
+    /// Top bar shown (else only the thin strip).
+    bar: bool,
+    /// Shortcut overlay open.
+    help: bool,
+    top: f64,
     gap: f64,
     min_panel: f64,
     ratios: Vec<f64>,
     panels: Vec<PanelView>,
+}
+
+/// Bar is forced on with no accounts, otherwise "+ 계정" would be unreachable
+/// except by shortcut.
+fn bar_visible(s: &Settings) -> bool {
+    s.show_bar || s.accounts.is_empty()
+}
+
+fn top_of(s: &Settings) -> f64 {
+    if bar_visible(s) {
+        layout::TOP_BAR
+    } else {
+        layout::TOP_STRIP
+    }
 }
 
 fn logical_size<R: Runtime>(window: &Window<R>) -> (f64, f64) {
@@ -82,8 +109,11 @@ fn relayout<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_window(MAIN) else { return };
     let state = app.state::<AppState>();
     let s = state.settings.lock().unwrap().clone();
+    let active = *state.active.lock().unwrap();
+    let help = *state.help.lock().unwrap();
     let (w, h) = logical_size(&window);
-    let rects = layout::panels(w, h, &s.ratios);
+    let top = top_of(&s);
+    let rects = layout::panels(w, h, top, &s.ratios);
 
     if let Some(host) = app.get_webview(HOST) {
         let _ = host.set_bounds(tauri::Rect {
@@ -98,18 +128,24 @@ fn relayout<R: Runtime>(app: &AppHandle<R>) {
                 position: LogicalPosition::new(r.x, r.y).into(),
                 size: LogicalSize::new(r.w, r.h).into(),
             });
+            // Native webviews sit above the host UI; the overlay can only
+            // show while they are hidden.
+            let _ = if help { wv.hide() } else { wv.show() };
         }
         panels.push(PanelView {
             id: acc.id.to_string(),
             label: acc.label.clone(),
             color: acc.color.clone(),
+            active: active == Some(acc.id),
             rect: *r,
         });
     }
     let payload = LayoutPayload {
         win_w: w,
         win_h: h,
-        top_bar: layout::TOP_BAR,
+        bar: bar_visible(&s),
+        help,
+        top,
         gap: layout::GAP,
         min_panel: layout::MIN_PANEL,
         ratios: s.ratios.clone(),
@@ -126,6 +162,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect) 
 
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(START_URL.parse().unwrap()))
         .data_store_identifier(acc.store_id())
+        .initialization_script(PANEL_JS)
         .initialization_script(media::SCRIPT)
         .on_navigation(move |url| match nav::decide(url) {
             nav::Decision::Allow => true,
@@ -269,6 +306,110 @@ async fn commit_layout(app: AppHandle, state: State<'_, AppState>, ratios: Vec<f
     Ok(())
 }
 
+/// Give keyboard focus to the panel of `id`, so X's own shortcuts (j/k/...)
+/// go there, and mark it active right away (its focus report follows).
+fn focus_account(app: &AppHandle, id: Uuid) {
+    let state = app.state::<AppState>();
+    let label = format!("panel-{}", id.simple());
+    if let Some(wv) = app.get_webview(&label) {
+        let _ = wv.set_focus();
+    }
+    let changed = state.active.lock().unwrap().replace(id) != Some(id);
+    if changed {
+        relayout(app);
+    }
+}
+
+/// Panel webview got keyboard focus (click, Tab, or focus_account).
+/// Called from PANEL_JS; the caller is identified by its webview label,
+/// not by anything the page sends.
+#[tauri::command]
+async fn panel_focused(app: AppHandle, state: State<'_, AppState>, webview: Webview) -> Result<(), String> {
+    let id = {
+        let s = state.settings.lock().unwrap();
+        s.accounts
+            .iter()
+            .find(|a| panel_label(a) == webview.label())
+            .map(|a| a.id)
+            .ok_or("not a panel")?
+    };
+    let changed = state.active.lock().unwrap().replace(id) != Some(id);
+    if changed {
+        relayout(&app);
+    }
+    Ok(())
+}
+
+/// App shortcuts, from a panel (PANEL_JS) or the host UI:
+/// - `focus` + `index`: Ctrl/Cmd+1..9
+/// - `next` / `prev`: Ctrl+Tab / Ctrl+Shift+Tab (wraps)
+/// - `bar`: Ctrl/Cmd+Shift+H, show/hide the top bar
+/// - `help`: Ctrl/Cmd+/, open/close the shortcut overlay
+/// - `refocus`: host UI was clicked, hand focus back to the active panel
+#[tauri::command]
+async fn shortcut(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    action: String,
+    index: Option<usize>,
+) -> Result<(), String> {
+    if action == "help" {
+        let open = {
+            let mut h = state.help.lock().unwrap();
+            *h = !*h;
+            *h
+        };
+        relayout(&app);
+        if open {
+            if let Some(host) = app.get_webview(HOST) {
+                let _ = host.set_focus();
+            }
+        } else if let Some(id) = *state.active.lock().unwrap() {
+            focus_account(&app, id);
+        }
+        return Ok(());
+    }
+    // Any other shortcut closes the overlay.
+    let was_open = std::mem::replace(&mut *state.help.lock().unwrap(), false);
+    if was_open {
+        relayout(&app);
+    }
+    if action == "bar" {
+        let snapshot = {
+            let mut s = state.settings.lock().unwrap();
+            s.show_bar = !s.show_bar;
+            s.clone()
+        };
+        state.save(&snapshot);
+        relayout(&app);
+        if was_open {
+            if let Some(id) = *state.active.lock().unwrap() {
+                focus_account(&app, id);
+            }
+        }
+        return Ok(());
+    }
+    let ids: Vec<Uuid> = state.settings.lock().unwrap().accounts.iter().map(|a| a.id).collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let active = *state.active.lock().unwrap();
+    let cur = active.and_then(|a| ids.iter().position(|i| *i == a));
+    let n = ids.len();
+    let target = match action.as_str() {
+        "focus" => match index {
+            Some(i) if i < n => i,
+            _ => return Ok(()),
+        },
+        "next" => cur.map_or(0, |c| (c + 1) % n),
+        "prev" => cur.map_or(n - 1, |c| (c + n - 1) % n),
+        "refocus" => cur.unwrap_or(0),
+        _ => return Err("unknown shortcut".into()),
+    };
+    focus_account(&app, ids[target]);
+    Ok(())
+}
+
 #[tauri::command]
 async fn reload_panel(app: AppHandle, id: String) -> Result<(), String> {
     let label = format!("panel-{}", id.replace('-', ""));
@@ -282,7 +423,7 @@ async fn add_account(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
     // Create the webview first and only then record the account, so a
     // failed add_child leaves no panel-less account behind.
     let mut acc = Account::new("", COLORS[0]);
-    let rect = layout::Rect { x: 0.0, y: layout::TOP_BAR, w: 10.0, h: 10.0 };
+    let rect = layout::Rect { x: 0.0, y: layout::TOP_STRIP, w: 10.0, h: 10.0 };
     add_panel(&window, &acc, rect).map_err(|e| e.to_string())?;
     {
         let mut s = state.settings.lock().unwrap();
@@ -311,6 +452,11 @@ async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: String) 
             .position(|a| a.id.to_string() == id)
             .ok_or("no such account")?;
         let acc = s.accounts.remove(idx);
+        let mut active = state.active.lock().unwrap();
+        if *active == Some(acc.id) {
+            *active = None;
+        }
+        drop(active);
         let (w, _) = logical_size(&window);
         s.ratios = layout::clamp_ratios(w, &layout::with_removed(&s.ratios, idx));
         s.fix_ratios();
@@ -383,6 +529,8 @@ pub fn run() {
             purge_pending_profiles(app, &mut s);
             let state = AppState {
                 settings: Mutex::new(s.clone()),
+                active: Mutex::new(s.accounts.first().map(|a| a.id)),
+                help: Mutex::new(false),
                 path,
                 persist,
             };
@@ -393,6 +541,9 @@ pub fn run() {
                 .title("Paneful")
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(400.0, 300.0)
+                // Dark title bar (Windows) / appearance (macOS) to match
+                // X's dark theme and the host UI.
+                .theme(Some(tauri::Theme::Dark))
                 .build()?;
             let (w, h) = logical_size(&window);
 
@@ -404,9 +555,15 @@ pub fn run() {
                 LogicalSize::new(w, h),
             )?;
 
-            let rects = layout::panels(w, h, &s.ratios);
+            let rects = layout::panels(w, h, top_of(&s), &s.ratios);
             for (acc, r) in s.accounts.iter().zip(rects) {
                 add_panel(&window, acc, r)?;
+            }
+            // Each new webview grabs focus; start on the first panel instead.
+            if let Some(acc) = s.accounts.first() {
+                if let Some(wv) = app.get_webview(&panel_label(acc)) {
+                    let _ = wv.set_focus();
+                }
             }
 
             let handle = app.handle().clone();
@@ -431,7 +588,9 @@ pub fn run() {
             commit_layout,
             reload_panel,
             add_account,
-            remove_account
+            remove_account,
+            panel_focused,
+            shortcut
         ])
         .run(tauri::generate_context!())
         .expect("error while running paneful");
