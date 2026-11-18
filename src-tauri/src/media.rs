@@ -150,7 +150,7 @@ pub fn parse(url: &Url) -> Result<SaveRequest, &'static str> {
 
 /// `name.ext`, `name (2).ext`, ... : first one that doesn't exist yet,
 /// created atomically so two saves never share a file.
-fn create_unique(dir: &Path, file_name: &str) -> std::io::Result<(PathBuf, fs::File)> {
+pub(crate) fn create_unique(dir: &Path, file_name: &str) -> std::io::Result<(PathBuf, fs::File)> {
     let (stem, ext) = file_name.rsplit_once('.').unwrap_or((file_name, ""));
     for i in 1..=999 {
         let name = if i == 1 { file_name.to_string() } else { format!("{stem} ({i}).{ext}") };
@@ -164,7 +164,7 @@ fn create_unique(dir: &Path, file_name: &str) -> std::io::Result<(PathBuf, fs::F
     Err(std::io::Error::other("too many files with the same name"))
 }
 
-fn client() -> &'static reqwest::Client {
+pub(crate) fn client() -> &'static reqwest::Client {
     static C: OnceLock<reqwest::Client> = OnceLock::new();
     C.get_or_init(|| {
         reqwest::Client::builder()

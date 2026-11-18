@@ -13,6 +13,7 @@
     <div class="actions">
       <span id="status" role="alert" hidden></span>
       <button id="add" class="pill" title="계정 추가">＋ 계정</button>
+      <button id="capture" class="icon" data-icon="camera"></button>
       <button id="tray" class="icon" data-icon="eyeOff"></button>
       <button id="help" class="icon" data-icon="keyboard"></button>
       <button id="hide" class="icon" data-icon="chevronUp"></button>
@@ -38,6 +39,21 @@
       <p class="foot">X 단축키는 색 표시된 활성 패널에서 동작 · 패널을 클릭해도 전환 · 닫기 <kbd>Esc</kbd></p>
     </div>
   </div>
+  <div id="cap" hidden>
+    <div class="cap-head">
+      <h1>게시물 캡쳐</h1>
+      <span id="cap-info"></span>
+      <label class="check"><input type="checkbox" id="cap-anon" checked> 익명화</label>
+      <label class="check"><input type="checkbox" id="cap-time" checked> 시간</label>
+      <button id="cap-copy" class="pill">복사</button>
+      <button id="cap-save" class="pill">PNG 저장</button>
+      <button id="cap-both" class="pill primary">저장 + 복사</button>
+      <button id="cap-close" class="icon" data-icon="close"></button>
+    </div>
+    <p id="cap-msg" role="status"></p>
+    <div id="cap-view"></div>
+  </div>
   <script src="app.js"></script>
+  <script src="capture.js"></script>
 </body>
 </html>

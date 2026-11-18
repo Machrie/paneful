@@ -13,6 +13,9 @@
     "allow-reload-panel",
     "allow-add-account",
     "allow-remove-account",
-    "allow-shortcut"
+    "allow-shortcut",
+    "allow-capture-close",
+    "allow-capture-image",
+    "allow-capture-export"
   ]
 }

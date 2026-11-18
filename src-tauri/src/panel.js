@@ -2,7 +2,8 @@
 // scripts. Two jobs, nothing else:
 // 1. tell the app when this panel gets keyboard focus (active-panel marker)
 // 2. catch the app's own shortcuts before x.com sees them
-// The panel capability only allows `panel_focused` and `shortcut`.
+// The panel capability allows `panel_focused`, `shortcut` and (for
+// capture.js, which also handles its own Ctrl/Cmd+Shift+S) `capture_posts`.
 // Ctrl/Cmd+/ is free on x.com (its own help is a bare `?`).
 // Keep the key mapping in sync with ui/app.js.
 (() => {

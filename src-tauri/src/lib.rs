@@ -5,6 +5,7 @@
 //! - Windows: same call; the patched tauri-runtime-wry turns it into a
 //!   WebView2 profile name, so all panels share one WebView2 runtime.
 
+mod capture;
 mod layout;
 mod media;
 mod nav;
@@ -24,18 +25,20 @@ use tauri::{
 use tauri_plugin_opener::OpenerExt;
 
 pub(crate) const MAIN: &str = "main";
-const HOST: &str = "host";
+pub(crate) const HOST: &str = "host";
 const START_URL: &str = "https://x.com/home";
 /// Injected into every panel's main frame: reports focus and the app's own
 /// shortcuts. The panel capability lets x.com reach only those two commands.
 const PANEL_JS: &str = include_str!("panel.js");
 
-struct AppState {
+pub(crate) struct AppState {
     settings: Mutex<Settings>,
     /// Account whose panel last had keyboard focus. Not persisted.
     active: Mutex<Option<Uuid>>,
     /// Shortcut overlay open: panels are hidden so the host UI can draw it.
     help: Mutex<bool>,
+    /// Capture preview open: panels are hidden the same way.
+    capture: Mutex<bool>,
     /// Global show/hide shortcut as registered (None: off or failed).
     hotkey: Option<String>,
     /// Why the shortcut isn't registered, shown once in the host UI.
@@ -77,6 +80,8 @@ struct LayoutPayload {
     bar: bool,
     /// Shortcut overlay open.
     help: bool,
+    /// Capture preview open.
+    capture: bool,
     top: f64,
     gap: f64,
     min_panel: f64,
@@ -113,12 +118,13 @@ fn logical_size<R: Runtime>(window: &Window<R>) -> (f64, f64) {
 }
 
 /// Recompute every rect, move the webviews, tell the host UI.
-fn relayout<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_window(MAIN) else { return };
     let state = app.state::<AppState>();
     let s = state.settings.lock().unwrap().clone();
     let active = *state.active.lock().unwrap();
     let help = *state.help.lock().unwrap();
+    let capture = *state.capture.lock().unwrap();
     let (w, h) = logical_size(&window);
     let top = top_of(&s);
     let rects = layout::panels(w, h, top, &s.ratios);
@@ -136,9 +142,9 @@ fn relayout<R: Runtime>(app: &AppHandle<R>) {
                 position: LogicalPosition::new(r.x, r.y).into(),
                 size: LogicalSize::new(r.w, r.h).into(),
             });
-            // Native webviews sit above the host UI; the overlay can only
+            // Native webviews sit above the host UI; the overlays can only
             // show while they are hidden.
-            let _ = if help { wv.hide() } else { wv.show() };
+            let _ = if help || capture { wv.hide() } else { wv.show() };
         }
         panels.push(PanelView {
             id: acc.id.to_string(),
@@ -153,6 +159,7 @@ fn relayout<R: Runtime>(app: &AppHandle<R>) {
         win_h: h,
         bar: bar_visible(&s),
         help,
+        capture,
         top,
         gap: layout::GAP,
         min_panel: layout::MIN_PANEL,
@@ -174,6 +181,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect) 
         .data_store_identifier(acc.store_id())
         .initialization_script(PANEL_JS)
         .initialization_script(media::SCRIPT)
+        .initialization_script(capture::SCRIPT)
         .on_navigation(move |url| match nav::decide(url) {
             nav::Decision::Allow => true,
             nav::Decision::OpenExternal => {
@@ -278,7 +286,8 @@ fn purge_pending_profiles(app: &tauri::App, s: &mut Settings) {
 }
 
 // ---------------------------------------------------------------- commands
-// Only the host webview has IPC (capabilities/host.json). Commands are async
+// The host webview may call these (capabilities/host.json); x.com panels only
+// panel_focused, shortcut and capture_posts (capabilities/panel.json). Commands are async
 // because add_child from a sync command deadlocks on WebView2.
 
 #[tauri::command]
@@ -320,7 +329,7 @@ async fn commit_layout(app: AppHandle, state: State<'_, AppState>, ratios: Vec<f
 
 /// Give keyboard focus to the panel of `id`, so X's own shortcuts (j/k/...)
 /// go there, and mark it active right away (its focus report follows).
-fn focus_account<R: Runtime>(app: &AppHandle<R>, id: Uuid) {
+pub(crate) fn focus_account<R: Runtime>(app: &AppHandle<R>, id: Uuid) {
     let state = app.state::<AppState>();
     let label = format!("panel-{}", id.simple());
     if let Some(wv) = app.get_webview(&label) {
@@ -367,6 +376,8 @@ async fn panel_focused(app: AppHandle, state: State<'_, AppState>, webview: Webv
 /// - `help`: Ctrl/Cmd+/, open/close the shortcut overlay
 /// - `refocus`: host UI was clicked, hand focus back to the active panel
 /// - `tray`: hide the window to the tray (top bar button)
+/// - `capture`: Ctrl/Cmd+Shift+S from the host UI or the top bar button:
+///   start picking posts in the active panel (capture.js)
 #[tauri::command]
 async fn shortcut(
     app: AppHandle,
@@ -384,6 +395,30 @@ async fn shortcut(
 
 fn run_shortcut(app: &AppHandle, state: &AppState, action: &str, index: Option<usize>) -> Result<(), String> {
     let app = app.clone();
+    // Capture preview open: the host UI handles its own keys; any app
+    // shortcut that still gets here closes it first.
+    if *state.capture.lock().unwrap() {
+        capture::close(&app, state);
+        if action == "capture" {
+            return Ok(());
+        }
+    }
+    if action == "capture" {
+        let was_open = std::mem::replace(&mut *state.help.lock().unwrap(), false);
+        if was_open {
+            relayout(&app);
+        }
+        let ids: Vec<Uuid> = state.settings.lock().unwrap().accounts.iter().map(|a| a.id).collect();
+        let active = *state.active.lock().unwrap();
+        let Some(id) = active.filter(|a| ids.contains(a)).or(ids.first().copied()) else {
+            return Ok(());
+        };
+        focus_account(&app, id);
+        if let Some(wv) = app.get_webview(&format!("panel-{}", id.simple())) {
+            let _ = wv.eval("window.dispatchEvent(new Event('paneful-capture'))");
+        }
+        return Ok(());
+    }
     if action == "help" {
         let open = {
             let mut h = state.help.lock().unwrap();
@@ -552,6 +587,7 @@ async fn purge_pending_stores(app: &AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(tray::on_shortcut)
@@ -585,6 +621,7 @@ pub fn run() {
                 settings: Mutex::new(s.clone()),
                 active: Mutex::new(s.accounts.first().map(|a| a.id)),
                 help: Mutex::new(false),
+                capture: Mutex::new(false),
                 hotkey,
                 hotkey_error,
                 path,
@@ -651,7 +688,11 @@ pub fn run() {
             add_account,
             remove_account,
             panel_focused,
-            shortcut
+            shortcut,
+            capture::capture_posts,
+            capture::capture_close,
+            capture::capture_image,
+            capture::capture_export
         ])
         .run(tauri::generate_context!())
         .expect("error while running paneful");
