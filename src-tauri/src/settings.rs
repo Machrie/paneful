@@ -1,7 +1,7 @@
 //! settings.json in app_config_dir. Written atomically (tmp file + rename).
 
 use serde::{Deserialize, Serialize};
-use std::{fs, io, path::Path};
+use std::{collections::BTreeMap, fs, io, path::Path};
 use uuid::Uuid;
 
 pub const SETTINGS_VERSION: u32 = 1;
@@ -57,6 +57,13 @@ pub struct Settings {
     /// ("CommandOrControl+Alt+X"). Missing = DEFAULT_HOTKEY, "" = off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hotkey: Option<String>,
+    /// In-app shortcuts by id (see keys::APP), accelerator syntax.
+    /// Missing id = default, "" = off.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keys: BTreeMap<String, String>,
+    /// Folder for downloaded media and captures. Missing = <Downloads>/Paneful.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save_dir: Option<String>,
 }
 
 /// Ctrl+Alt+X (Windows) / Cmd+Option+X (macOS). Not an X shortcut (those
@@ -88,6 +95,8 @@ impl Default for Settings {
             pending_store_deletes: vec![],
             show_bar: false,
             hotkey: None,
+            keys: BTreeMap::new(),
+            save_dir: None,
         }
     }
 }
@@ -148,6 +157,8 @@ impl Settings {
             pending_store_deletes: field(&v, "pending_store_deletes"),
             show_bar: field(&v, "show_bar"),
             hotkey: field(&v, "hotkey"),
+            keys: field(&v, "keys"),
+            save_dir: field(&v, "save_dir"),
         })
     }
 
@@ -163,6 +174,15 @@ impl Settings {
             Some("") => None,
             Some(k) => Some(k),
         }
+    }
+
+    /// Every shortcut by id, the global one included under keys::GLOBAL.
+    pub fn key_map(&self) -> BTreeMap<String, String> {
+        let mut m = self.keys.clone();
+        if let Some(k) = &self.hotkey {
+            m.insert(crate::keys::GLOBAL.into(), k.clone());
+        }
+        m
     }
 
     pub fn fix_ratios(&mut self) {
@@ -263,5 +283,17 @@ mod tests {
         let v = serde_json::json!({"version": 1, "accounts": [], "ratios": []});
         let l: Settings = serde_json::from_value(v).unwrap();
         assert_eq!(l.hotkey(), Some(DEFAULT_HOTKEY));
+        assert!(l.keys.is_empty() && l.save_dir.is_none());
+    }
+
+    #[test]
+    fn key_map_has_global() {
+        let mut s = Settings::default();
+        assert!(!s.key_map().contains_key(crate::keys::GLOBAL));
+        s.hotkey = Some(String::new());
+        s.keys.insert("bar".into(), "Alt+B".into());
+        let m = s.key_map();
+        assert_eq!(m[crate::keys::GLOBAL], "");
+        assert_eq!(m["bar"], "Alt+B");
     }
 }

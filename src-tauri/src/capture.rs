@@ -9,7 +9,7 @@
 //!    images it needs come through `capture_image`: cookie-less, public
 //!    pbs.twimg.com files only, like "원본 저장".
 //! 4. `capture_export` gets the canvases as PNG strips, joins them into one
-//!    image and saves it to `<Downloads>/Paneful` and/or the clipboard.
+//!    image and saves it to the save folder (media::save_dir) and/or the clipboard.
 
 use serde::{Deserialize, Serialize};
 use std::{io::Write, path::PathBuf};
@@ -313,6 +313,8 @@ pub async fn capture_posts(
     }
     log::info!("capture: {} posts from {}", posts.len(), webview.label());
     *state.help.lock().unwrap() = false;
+    *state.settings_open.lock().unwrap() = false;
+    crate::tray::RECORDING.store(false, std::sync::atomic::Ordering::Relaxed);
     *state.capture.lock().unwrap() = true;
     crate::relayout(&app);
     let _ = app.emit_to(HOST, "capture", CapturePayload { posts, cut });

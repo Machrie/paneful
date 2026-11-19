@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-panel-keys"
+description = "Enables the panel_keys command without any pre-configured scope."
+commands.allow = ["panel_keys"]
+
+[[permission]]
+identifier = "deny-panel-keys"
+description = "Denies the panel_keys command without any pre-configured scope."
+commands.deny = ["panel_keys"]

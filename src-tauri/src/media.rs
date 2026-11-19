@@ -5,7 +5,8 @@
 //! click on it calls `window.open(TRIGGER?...)`; panels have no IPC, so the
 //! panel's `on_new_window` handler catches that URL, denies the window and
 //! hands it to `handle`. Rust then downloads exactly that one file into
-//! `<Downloads>/Paneful` and reports back to the panel with a DOM event.
+//! the save folder (settings, default `<Downloads>/Paneful`) and reports
+//! back to the panel with a DOM event.
 //!
 //! Only `pbs.twimg.com/media/...` and `video.twimg.com/...mp4` are accepted,
 //! so a page that opens the trigger URL itself can at most save one public
@@ -164,12 +165,6 @@ pub(crate) fn create_unique(dir: &Path, file_name: &str) -> std::io::Result<(Pat
     Err(std::io::Error::other("too many files with the same name"))
 }
 
-/// Where "원본 저장" and post captures go: `<Downloads>/Paneful`. The one
-/// place to change when the folder becomes a setting.
-pub(crate) fn save_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    Ok(app.path().download_dir().map_err(|e| e.to_string())?.join("Paneful"))
-}
-
 pub(crate) fn client() -> &'static reqwest::Client {
     static C: OnceLock<reqwest::Client> = OnceLock::new();
     C.get_or_init(|| {
@@ -244,6 +239,22 @@ fn report<R: Runtime>(app: &AppHandle<R>, label: &str, src: &str, ok: bool, mess
     let _ = wv.eval(format!(
         "window.dispatchEvent(new CustomEvent('paneful-media-saved',{{detail:{detail}}}))"
     ));
+}
+
+/// `<Downloads>/Paneful`, used when no folder is set in settings.
+pub fn default_save_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    app.path().download_dir().map(|d| d.join("Paneful")).map_err(|e| e.to_string())
+}
+
+/// Folder for media downloads and post captures: the one set in settings,
+/// else the default.
+/// Only reads settings (short lock, no window calls under it).
+pub fn save_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let custom = app.state::<crate::AppState>().settings.lock().unwrap().save_dir.clone();
+    match custom.filter(|d| !d.trim().is_empty()) {
+        Some(d) => Ok(PathBuf::from(d)),
+        None => default_save_dir(app),
+    }
 }
 
 /// Called from the panel's `on_new_window` for a trigger URL.

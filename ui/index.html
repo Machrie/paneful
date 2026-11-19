@@ -16,11 +16,12 @@
       <button id="capture" class="icon" data-icon="camera"></button>
       <button id="tray" class="icon" data-icon="eyeOff"></button>
       <button id="help" class="icon" data-icon="keyboard"></button>
+      <button id="settings-btn" class="icon" data-icon="gear"></button>
       <button id="hide" class="icon" data-icon="chevronUp"></button>
     </div>
   </header>
   <div id="dividers"></div>
-  <div id="overlay" hidden>
+  <div id="overlay" class="overlay" hidden>
     <div class="sheet" role="dialog" aria-label="단축키">
       <div class="sheet-head">
         <h1>단축키</h1>
@@ -39,6 +40,29 @@
       <p class="foot">X 단축키는 색 표시된 활성 패널에서 동작 · 패널을 클릭해도 전환 · 닫기 <kbd>Esc</kbd></p>
     </div>
   </div>
+  <div id="settings" class="overlay" hidden>
+    <div class="sheet narrow" role="dialog" aria-label="설정">
+      <div class="sheet-head">
+        <h1>설정</h1>
+        <button id="settings-close" class="icon" data-icon="close" title="닫기 (Esc)"></button>
+      </div>
+      <section>
+        <h2>저장 폴더</h2>
+        <p class="hint">이미지·동영상 다운과 게시물 캡쳐 PNG가 저장되는 곳<span id="save-default"> · 지금은 기본 폴더</span></p>
+        <div class="dirrow">
+          <code id="save-dir"></code>
+          <button id="save-pick" class="pill">변경</button>
+          <button id="save-open" class="pill">열기</button>
+          <button id="save-reset" class="pill">기본값</button>
+        </div>
+      </section>
+      <section>
+        <h2>단축키</h2>
+        <p class="hint">키 칸을 누르고 새 조합을 누르면 바로 바뀜. Ctrl·Alt·⌘ 중 하나는 같이 눌러야 함 (F1~F24는 단독 가능).</p>
+        <div id="key-rows"></div>
+      </section>
+      <p id="settings-msg" class="foot" role="status"></p>
+    </div>
   <div id="cap" hidden>
     <div class="cap-head">
       <h1>게시물 캡쳐</h1>

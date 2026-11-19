@@ -11,9 +11,10 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Manager, Runtime,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
-use crate::MAIN;
+use crate::{keys, MAIN};
 
 /// What the global shortcut / tray click should do.
 #[derive(Clone, Copy)]
@@ -30,7 +31,7 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) {
     let Some(w) = app.get_window(MAIN) else { return };
     // No tray icon and no shortcut: nothing could bring the window back.
     let tray = app.tray_by_id("main").is_some();
-    let hotkey = app.state::<crate::AppState>().hotkey.is_some();
+    let hotkey = app.state::<crate::AppState>().hotkey.lock().unwrap().is_some();
     if !tray && !hotkey {
         log::warn!("not hiding: no tray icon and no global shortcut");
         return;
@@ -101,23 +102,42 @@ fn toggle_inner<R: Runtime>(app: &AppHandle<R>, how: Toggle) {
     }
 }
 
-/// Tray / menu bar icon with "보이기/숨기기" and "종료".
+fn tooltip(hotkey: Option<&str>) -> String {
+    match hotkey {
+        Some(k) => format!("Paneful ({})", keys::display(k)),
+        None => "Paneful".into(),
+    }
+}
+
+/// Tooltip hint after the global shortcut changed in settings.
+pub fn set_tooltip<R: Runtime>(app: &AppHandle<R>, hotkey: Option<&str>) {
+    if let Some(t) = app.tray_by_id("main") {
+        let _ = t.set_tooltip(Some(tooltip(hotkey)));
+    }
+}
+
+/// Tray / menu bar icon with "보이기/숨기기", "설정" and "종료".
 /// `hotkey` is only shown as a hint in the tooltip.
 pub fn create<R: Runtime>(app: &AppHandle<R>, hotkey: Option<&str>) -> tauri::Result<()> {
     let toggle_item = MenuItem::with_id(app, "toggle", "Paneful 보이기/숨기기", true, None::<&str>)?;
+    let settings_item = MenuItem::with_id(app, "settings", "설정", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "종료", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&toggle_item, &sep, &quit])?;
-    let tooltip = match hotkey {
-        Some(k) => format!("Paneful ({})", display(k)),
-        None => "Paneful".into(),
-    };
+    let menu = Menu::with_items(app, &[&toggle_item, &settings_item, &sep, &quit])?;
 
     let mut b = TrayIconBuilder::with_id("main")
-        .tooltip(tooltip)
+        .tooltip(tooltip(hotkey))
         .menu(&menu)
         .on_menu_event(|app, e| match e.id().as_ref() {
             "toggle" => toggle_later(app, Toggle::Tray),
+            "settings" => {
+                // Worker thread, same reason as toggle_later.
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    show(&app);
+                    crate::open_settings(&app);
+                });
+            }
             "quit" => app.exit(0),
             _ => {}
         })
@@ -147,9 +167,13 @@ pub fn create<R: Runtime>(app: &AppHandle<R>, hotkey: Option<&str>) -> tauri::Re
     Ok(())
 }
 
+/// Settings screen is waiting for a key press: the global shortcut must not
+/// hide the window under it.
+pub static RECORDING: AtomicBool = AtomicBool::new(false);
+
 /// Global shortcut handler (registered with the plugin builder).
 pub fn on_shortcut<R: Runtime>(app: &AppHandle<R>, _s: &Shortcut, e: ShortcutEvent) {
-    if e.state == ShortcutState::Pressed {
+    if e.state == ShortcutState::Pressed && !RECORDING.load(Ordering::Relaxed) {
         toggle_later(app, Toggle::Shortcut);
     }
 }
@@ -157,37 +181,19 @@ pub fn on_shortcut<R: Runtime>(app: &AppHandle<R>, _s: &Shortcut, e: ShortcutEve
 /// Register the show/hide shortcut. Ok(None) when turned off in settings.
 pub fn register<R: Runtime>(app: &AppHandle<R>, hotkey: Option<&str>) -> Result<Option<String>, String> {
     let Some(k) = hotkey else { return Ok(None) };
-    let sc: Shortcut = k.parse().map_err(|e| format!("단축키 형식 오류 \"{k}\": {e}"))?;
+    let sc = keys::parse(k)?;
     app.global_shortcut()
         .register(sc)
-        .map_err(|e| format!("전역 단축키 {} 등록 실패 (다른 앱이 쓰는 중일 수 있음): {e}", display(k)))?;
+        .map_err(|e| format!("전역 단축키 {} 등록 실패 (다른 앱이 쓰는 중일 수 있음): {e}", keys::display(k)))?;
     Ok(Some(k.to_string()))
 }
 
-/// "CommandOrControl+Alt+X" -> ["Ctrl", "Alt", "X"] / ["⌘", "⌥", "X"].
-pub fn keys(accel: &str) -> Vec<String> {
-    let mac = cfg!(target_os = "macos");
-    accel
-        .split('+')
-        .map(|p| {
-            let t = p.trim();
-            let s = match t.to_ascii_lowercase().as_str() {
-                "commandorcontrol" | "cmdorctrl" | "commandorctrl" | "cmdorcontrol" => {
-                    if mac { "⌘" } else { "Ctrl" }
-                }
-                "command" | "cmd" | "super" | "meta" => if mac { "⌘" } else { "Win" },
-                "control" | "ctrl" => if mac { "⌃" } else { "Ctrl" },
-                "alt" | "option" => if mac { "⌥" } else { "Alt" },
-                "shift" => "Shift",
-                _ => return t.to_ascii_uppercase(),
-            };
-            s.to_string()
-        })
-        .collect()
-}
-
-pub fn display(accel: &str) -> String {
-    keys(accel).join("+")
+pub fn unregister<R: Runtime>(app: &AppHandle<R>, hotkey: &str) {
+    if let Ok(sc) = keys::parse(hotkey) {
+        if let Err(e) = app.global_shortcut().unregister(sc) {
+            log::warn!("unregistering {hotkey} failed: {e}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -202,9 +208,9 @@ mod tests {
 
     #[test]
     fn display_keys() {
-        let d = display("CommandOrControl+Alt+X");
+        let d = keys::display("CommandOrControl+Alt+X");
         if cfg!(target_os = "macos") {
-            assert_eq!(d, "⌘+⌥+X");
+            assert_eq!(d, "⌥+⌘+X");
         } else {
             assert_eq!(d, "Ctrl+Alt+X");
         }

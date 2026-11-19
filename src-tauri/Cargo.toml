@@ -1,6 +1,6 @@
 [package]
 name = "paneful"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 description = "Lightweight split-pane desktop client for x.com with isolated accounts"
 license = "MIT"
@@ -37,6 +37,8 @@ tauri-plugin-clipboard-manager = "2"
 png = "0.18"
 # Show/hide toggle that works while another app has focus.
 tauri-plugin-global-shortcut = "2"
+# Folder picker for the save folder in settings (used from Rust only).
+tauri-plugin-dialog = "2"
 
 [target.'cfg(windows)'.dependencies]
 # Same versions tauri-runtime-wry 2.12.5 uses; only for the M0 profile check.

@@ -5,6 +5,7 @@
 //! - Windows: same call; the patched tauri-runtime-wry turns it into a
 //!   WebView2 profile name, so all panels share one WebView2 runtime.
 
+mod keys;
 mod capture;
 mod layout;
 mod media;
@@ -14,7 +15,7 @@ mod tray;
 
 use serde::Serialize;
 use settings::{Account, Persist, Settings, COLORS};
-use std::{path::PathBuf, sync::Mutex};
+use std::{collections::BTreeMap, path::PathBuf, sync::Mutex};
 use uuid::Uuid;
 use tauri::{
     webview::{NewWindowResponse, WebviewBuilder},
@@ -22,13 +23,15 @@ use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Runtime, State, Webview, WebviewUrl,
     Window, WindowEvent,
 };
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 pub(crate) const MAIN: &str = "main";
 pub(crate) const HOST: &str = "host";
 const START_URL: &str = "https://x.com/home";
 /// Injected into every panel's main frame: reports focus and the app's own
-/// shortcuts. The panel capability lets x.com reach only those two commands.
+/// shortcuts. The panel capability lets x.com reach only those commands.
+/// `/*KEYS*/null` is replaced with the shortcut bindings at creation.
 const PANEL_JS: &str = include_str!("panel.js");
 
 pub(crate) struct AppState {
@@ -37,12 +40,14 @@ pub(crate) struct AppState {
     active: Mutex<Option<Uuid>>,
     /// Shortcut overlay open: panels are hidden so the host UI can draw it.
     help: Mutex<bool>,
+    /// Settings screen open: panels are hidden the same way.
+    settings_open: Mutex<bool>,
     /// Capture preview open: panels are hidden the same way.
     capture: Mutex<bool>,
     /// Global show/hide shortcut as registered (None: off or failed).
-    hotkey: Option<String>,
-    /// Why the shortcut isn't registered, shown once in the host UI.
-    hotkey_error: Option<String>,
+    hotkey: Mutex<Option<String>>,
+    /// Why the shortcut isn't registered (start or last change attempt).
+    hotkey_error: Mutex<Option<String>>,
     path: PathBuf,
     persist: Persist,
 }
@@ -87,9 +92,18 @@ struct LayoutPayload {
     min_panel: f64,
     ratios: Vec<f64>,
     panels: Vec<PanelView>,
+    /// Settings screen open.
+    settings: bool,
     /// Global show/hide shortcut, as key caps for the overlay. Empty: none.
     hotkey: Vec<String>,
     hotkey_error: Option<String>,
+    /// Global shortcut as configured (may differ from `hotkey` if it failed).
+    global: keys::KeyView,
+    /// In-app shortcuts, display order.
+    keys: Vec<keys::KeyView>,
+    /// Save folder in effect, and whether it is the default one.
+    save_dir: String,
+    save_dir_default: bool,
 }
 
 /// Bar is forced on with no accounts, otherwise "+ 계정" would be unreachable
@@ -124,6 +138,9 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
     let s = state.settings.lock().unwrap().clone();
     let active = *state.active.lock().unwrap();
     let help = *state.help.lock().unwrap();
+    let settings_open = *state.settings_open.lock().unwrap();
+    let hotkey = state.hotkey.lock().unwrap().clone();
+    let hotkey_error = state.hotkey_error.lock().unwrap().clone();
     let capture = *state.capture.lock().unwrap();
     let (w, h) = logical_size(&window);
     let top = top_of(&s);
@@ -144,7 +161,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
             });
             // Native webviews sit above the host UI; the overlays can only
             // show while they are hidden.
-            let _ = if help || capture { wv.hide() } else { wv.show() };
+            let _ = if help || settings_open || capture { wv.hide() } else { wv.show() };
         }
         panels.push(PanelView {
             id: acc.id.to_string(),
@@ -165,13 +182,23 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
         min_panel: layout::MIN_PANEL,
         ratios: s.ratios.clone(),
         panels,
-        hotkey: state.hotkey.as_deref().map(tray::keys).unwrap_or_default(),
-        hotkey_error: state.hotkey_error.clone(),
+        settings: settings_open,
+        hotkey: hotkey.as_deref().and_then(|k| keys::parse(k).ok()).map(|k| keys::caps(&k)).unwrap_or_default(),
+        hotkey_error,
+        global: keys::view(&s.key_map(), keys::GLOBAL),
+        keys: keys::views(&s.keys),
+        save_dir: media::save_dir(app).map(|d| d.display().to_string()).unwrap_or_default(),
+        save_dir_default: s.save_dir.is_none(),
     };
     let _ = app.emit_to(HOST, "layout", payload);
 }
 
-fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect) -> tauri::Result<()> {
+/// In-app shortcut bindings as JSON, for panel.js and the `paneful-keys` event.
+fn bindings_json(s: &Settings) -> String {
+    serde_json::to_string(&keys::bindings(&s.keys)).unwrap_or_else(|_| "null".into())
+}
+
+fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, keys_json: &str) -> tauri::Result<()> {
     let app = window.app_handle().clone();
     let app2 = app.clone();
     let label = panel_label(acc);
@@ -179,7 +206,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect) 
 
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(START_URL.parse().unwrap()))
         .data_store_identifier(acc.store_id())
-        .initialization_script(PANEL_JS)
+        .initialization_script(PANEL_JS.replace("/*KEYS*/null", keys_json))
         .initialization_script(media::SCRIPT)
         .initialization_script(capture::SCRIPT)
         .on_navigation(move |url| match nav::decide(url) {
@@ -374,6 +401,8 @@ async fn panel_focused(app: AppHandle, state: State<'_, AppState>, webview: Webv
 /// - `next` / `prev`: Ctrl+Tab / Ctrl+Shift+Tab (wraps)
 /// - `bar`: Ctrl/Cmd+Shift+H, show/hide the top bar
 /// - `help`: Ctrl/Cmd+/, open/close the shortcut overlay
+/// - `settings`: Ctrl/Cmd+, open/close the settings screen
+/// (keys of next/prev/bar/help/settings/capture are configurable, see keys.rs)
 /// - `refocus`: host UI was clicked, hand focus back to the active panel
 /// - `tray`: hide the window to the tray (top bar button)
 /// - `capture`: Ctrl/Cmd+Shift+S from the host UI or the top bar button:
@@ -393,6 +422,38 @@ async fn shortcut(
     r
 }
 
+/// Open/close the shortcut overlay and the settings screen (at most one).
+/// Open: keyboard focus to the host UI that draws it; closed: back to the
+/// active panel.
+fn set_overlay<R: Runtime>(app: &AppHandle<R>, state: &AppState, help: bool, settings: bool) {
+    *state.help.lock().unwrap() = help;
+    *state.settings_open.lock().unwrap() = settings;
+    if !settings {
+        tray::RECORDING.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    relayout(app);
+    if help || settings {
+        if let Some(host) = app.get_webview(HOST) {
+            let _ = host.set_focus();
+        }
+    } else {
+        // Copy the id out first: in edition 2021 an `if let` on
+        // `*m.lock().unwrap()` keeps the guard for the whole block, and
+        // focus_account locks `active` again -> self-deadlock.
+        let active = *state.active.lock().unwrap();
+        if let Some(id) = active {
+            focus_account(app, id);
+        }
+    }
+}
+
+/// Tray menu "설정": open the settings screen (window already shown).
+pub(crate) fn open_settings<R: Runtime>(app: &AppHandle<R>) {
+    let state = app.state::<AppState>();
+    capture::close(app, &state);
+    set_overlay(app, &state, false, true);
+}
+
 fn run_shortcut(app: &AppHandle, state: &AppState, action: &str, index: Option<usize>) -> Result<(), String> {
     let app = app.clone();
     // Capture preview open: the host UI handles its own keys; any app
@@ -404,8 +465,12 @@ fn run_shortcut(app: &AppHandle, state: &AppState, action: &str, index: Option<u
         }
     }
     if action == "capture" {
-        let was_open = std::mem::replace(&mut *state.help.lock().unwrap(), false);
-        if was_open {
+        let was_help = std::mem::replace(&mut *state.help.lock().unwrap(), false);
+        let was_settings = std::mem::replace(&mut *state.settings_open.lock().unwrap(), false);
+        if was_settings {
+            tray::RECORDING.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        if was_help || was_settings {
             relayout(&app);
         }
         let ids: Vec<Uuid> = state.settings.lock().unwrap().accounts.iter().map(|a| a.id).collect();
@@ -420,33 +485,26 @@ fn run_shortcut(app: &AppHandle, state: &AppState, action: &str, index: Option<u
         return Ok(());
     }
     if action == "help" {
-        let open = {
-            let mut h = state.help.lock().unwrap();
-            *h = !*h;
-            *h
-        };
-        relayout(&app);
-        if open {
-            if let Some(host) = app.get_webview(HOST) {
-                let _ = host.set_focus();
-            }
-        } else {
-            // Copy the id out first: in edition 2021 an `if let` on
-            // `*m.lock().unwrap()` keeps the guard for the whole block, and
-            // focus_account locks `active` again -> self-deadlock.
-            let active = *state.active.lock().unwrap();
-            if let Some(id) = active {
-                focus_account(&app, id);
-            }
-        }
+        let open = !*state.help.lock().unwrap();
+        set_overlay(&app, state, open, false);
+        return Ok(());
+    }
+    if action == "settings" {
+        let open = !*state.settings_open.lock().unwrap();
+        set_overlay(&app, state, false, open);
         return Ok(());
     }
     if action == "tray" {
         tray::hide(&app);
         return Ok(());
     }
-    // Any other shortcut closes the overlay.
-    let was_open = std::mem::replace(&mut *state.help.lock().unwrap(), false);
+    // Any other shortcut closes the overlays.
+    let was_help = std::mem::replace(&mut *state.help.lock().unwrap(), false);
+    let was_settings = std::mem::replace(&mut *state.settings_open.lock().unwrap(), false);
+    let was_open = was_help || was_settings;
+    if was_settings {
+        tray::RECORDING.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
     if was_open {
         relayout(&app);
     }
@@ -501,7 +559,8 @@ async fn add_account(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
     // failed add_child leaves no panel-less account behind.
     let mut acc = Account::new("", COLORS[0]);
     let rect = layout::Rect { x: 0.0, y: layout::TOP_STRIP, w: 10.0, h: 10.0 };
-    add_panel(&window, &acc, rect).map_err(|e| e.to_string())?;
+    let keys_json = bindings_json(&state.settings.lock().unwrap().clone());
+    add_panel(&window, &acc, rect, &keys_json).map_err(|e| e.to_string())?;
     let (w, _) = logical_size(&window); // not under the lock, see apply_ratios
     {
         let mut s = state.settings.lock().unwrap();
@@ -581,12 +640,161 @@ async fn purge_pending_stores(app: &AppHandle) {
     state.save(&snapshot);
 }
 
+// ---------------------------------------------------------------- settings
+// Never hold `settings` while calling into windows, webviews, the dialog or
+// the global shortcut plugin: those wait for the main thread, which locks
+// `settings` in relayout.
+
+/// Current in-app shortcut bindings. panel.js asks on every page load, since
+/// its initialization script keeps the bindings the panel was created with.
+#[tauri::command]
+async fn panel_keys(state: State<'_, AppState>) -> Result<BTreeMap<String, keys::Binding>, String> {
+    Ok(keys::bindings(&state.settings.lock().unwrap().keys))
+}
+
+/// Tell every panel the new bindings.
+fn push_keys<R: Runtime>(app: &AppHandle<R>, s: &Settings) {
+    let json = bindings_json(s);
+    for acc in &s.accounts {
+        if let Some(wv) = app.get_webview(&panel_label(acc)) {
+            let _ = wv.eval(format!(
+                "window.dispatchEvent(new CustomEvent('paneful-keys',{{detail:{json}}}))"
+            ));
+        }
+    }
+}
+
+/// Change one shortcut. `accel`: None = back to default, "" = off.
+#[tauri::command]
+async fn set_key(app: AppHandle, state: State<'_, AppState>, id: String, accel: Option<String>) -> Result<(), String> {
+    if keys::default_of(&id).is_none() {
+        return Err("unknown shortcut".into());
+    }
+    let accel = accel.map(|a| a.trim().to_string());
+    let map = state.settings.lock().unwrap().key_map();
+    // What the shortcut will be once stored (None: off).
+    let effective = match &accel {
+        None => keys::default_of(&id).map(str::to_string),
+        Some(a) if a.is_empty() => None,
+        Some(a) => Some(a.clone()),
+    };
+    if let Some(k) = &effective {
+        keys::validate(&map, &id, k)?;
+    }
+
+    if id == keys::GLOBAL {
+        let registered = state.hotkey.lock().unwrap().clone();
+        if registered != effective {
+            if let Some(old) = &registered {
+                tray::unregister(&app, old);
+            }
+            match tray::register(&app, effective.as_deref()) {
+                Ok(k) => {
+                    *state.hotkey.lock().unwrap() = k;
+                    *state.hotkey_error.lock().unwrap() = None;
+                }
+                Err(e) => {
+                    log::warn!("{e}");
+                    // Keep the old one working.
+                    let back = tray::register(&app, registered.as_deref()).ok().flatten();
+                    *state.hotkey.lock().unwrap() = back;
+                    *state.hotkey_error.lock().unwrap() = Some(e.clone());
+                    relayout(&app);
+                    return Err(e);
+                }
+            }
+        }
+        let snapshot = {
+            let mut s = state.settings.lock().unwrap();
+            s.hotkey = accel;
+            s.clone()
+        };
+        state.save(&snapshot);
+        tray::set_tooltip(&app, effective.as_deref());
+    } else {
+        let snapshot = {
+            let mut s = state.settings.lock().unwrap();
+            match accel {
+                None => s.keys.remove(&id),
+                Some(a) => s.keys.insert(id.clone(), a),
+            };
+            s.clone()
+        };
+        state.save(&snapshot);
+        push_keys(&app, &snapshot);
+    }
+    relayout(&app);
+    Ok(())
+}
+
+/// Settings screen is waiting for a key: don't let the global shortcut
+/// hide the window meanwhile.
+#[tauri::command]
+async fn set_recording(on: bool) {
+    tray::RECORDING.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Folder picker for the save folder. Ok(false): cancelled.
+#[tauri::command]
+async fn pick_save_dir(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+    let start = media::save_dir(&app).ok();
+    let mut dialog = app.dialog().file().set_title("저장 폴더 선택");
+    if let Some(d) = start.filter(|d| d.is_dir()) {
+        dialog = dialog.set_directory(d);
+    }
+    if let Some(w) = app.get_window(MAIN) {
+        dialog = dialog.set_parent(&w);
+    }
+    // Blocks until the dialog closes; keep it off the async workers.
+    let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_folder())
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(picked) = picked else { return Ok(false) };
+    let dir = picked.into_path().map_err(|e| e.to_string())?;
+    if !dir.is_dir() {
+        return Err(format!("폴더가 아님: {}", dir.display()));
+    }
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        s.save_dir = Some(dir.to_string_lossy().into_owned());
+        s.clone()
+    };
+    state.save(&snapshot);
+    relayout(&app);
+    Ok(true)
+}
+
+/// Back to `<Downloads>/Paneful`.
+#[tauri::command]
+async fn reset_save_dir(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        s.save_dir = None;
+        s.clone()
+    };
+    state.save(&snapshot);
+    relayout(&app);
+    Ok(())
+}
+
+/// Show the save folder in Explorer / Finder (created if missing).
+#[tauri::command]
+async fn open_save_dir(app: AppHandle) -> Result<(), String> {
+    let dir = media::save_dir(&app)?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("폴더를 만들 수 없음: {e}"))?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 // ---------------------------------------------------------------- entry
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Folder picker in settings. Called from Rust only; no JS permission.
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -621,9 +829,10 @@ pub fn run() {
                 settings: Mutex::new(s.clone()),
                 active: Mutex::new(s.accounts.first().map(|a| a.id)),
                 help: Mutex::new(false),
+                settings_open: Mutex::new(false),
+                hotkey: Mutex::new(hotkey),
+                hotkey_error: Mutex::new(hotkey_error),
                 capture: Mutex::new(false),
-                hotkey,
-                hotkey_error,
                 path,
                 persist,
             };
@@ -641,7 +850,8 @@ pub fn run() {
             let (w, h) = logical_size(&window);
             // Not fatal: without a tray icon the app still works, it just
             // can't be hidden from the top bar button (see tray::hide).
-            if let Err(e) = tray::create(app.handle(), app.state::<AppState>().hotkey.as_deref()) {
+            let hotkey = app.state::<AppState>().hotkey.lock().unwrap().clone();
+            if let Err(e) = tray::create(app.handle(), hotkey.as_deref()) {
                 log::error!("tray icon failed: {e}");
             }
 
@@ -654,8 +864,9 @@ pub fn run() {
             )?;
 
             let rects = layout::panels(w, h, top_of(&s), &s.ratios);
+            let keys_json = bindings_json(&s);
             for (acc, r) in s.accounts.iter().zip(rects) {
-                add_panel(&window, acc, r)?;
+                add_panel(&window, acc, r, &keys_json)?;
             }
             // Each new webview grabs focus; start on the first panel instead.
             if let Some(acc) = s.accounts.first() {
@@ -689,6 +900,12 @@ pub fn run() {
             remove_account,
             panel_focused,
             shortcut,
+            panel_keys,
+            set_key,
+            set_recording,
+            pick_save_dir,
+            reset_save_dir,
+            open_save_dir,
             capture::capture_posts,
             capture::capture_close,
             capture::capture_image,
