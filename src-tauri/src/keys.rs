@@ -14,7 +14,7 @@ use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 pub const GLOBAL: &str = "global";
 
 /// In-app shortcuts: (id, default). Panel focus (Ctrl/Cmd+1..9) is fixed.
-pub const APP: [(&str, &str); 8] = [
+pub const APP: [(&str, &str); 11] = [
     ("next", "Control+Tab"),
     ("prev", "Control+Shift+Tab"),
     ("bar", "CommandOrControl+Shift+H"),
@@ -26,6 +26,10 @@ pub const APP: [(&str, &str); 8] = [
     // Active panel fills the window, again to go back.
     ("zoom", "CommandOrControl+Shift+F"),
     ("settings", "CommandOrControl+Comma"),
+    // Page zoom of the panel the key is pressed in (or the active one).
+    ("zoom_in", "CommandOrControl+Equal"),
+    ("zoom_out", "CommandOrControl+Minus"),
+    ("zoom_reset", "CommandOrControl+0"),
 ];
 
 pub fn default_of(id: &str) -> Option<&'static str> {
@@ -201,6 +205,9 @@ pub fn label(id: &str) -> &'static str {
         "send" => "다른 패널에서 열기",
         "zoom" => "패널 하나만 크게 보기",
         "settings" => "설정",
+        "zoom_in" => "패널 배율 키우기",
+        "zoom_out" => "패널 배율 줄이기",
+        "zoom_reset" => "패널 배율 100%",
         _ => "?",
     }
 }
@@ -258,6 +265,9 @@ mod tests {
         assert_eq!(binding(&parse("Control+Tab").unwrap()).code, "Tab");
         assert_eq!(binding(&parse("Alt+5").unwrap()).code, "Digit5");
         assert_eq!(binding(&parse("Control+F5").unwrap()).code, "F5");
+        assert_eq!(binding(&parse("CommandOrControl+Equal").unwrap()).code, "Equal");
+        assert_eq!(binding(&parse("CommandOrControl+Minus").unwrap()).code, "Minus");
+        assert_eq!(binding(&parse("CommandOrControl+0").unwrap()).code, "Digit0");
     }
 
     #[test]

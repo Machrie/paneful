@@ -14,7 +14,7 @@ use tauri::{
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
-use crate::{keys, MAIN};
+use crate::{keys, unread, MAIN};
 
 /// What the global shortcut / tray click should do.
 #[derive(Clone, Copy)]
@@ -113,10 +113,60 @@ fn tooltip(hotkey: Option<&str>) -> String {
     }
 }
 
-/// Tooltip hint after the global shortcut changed in settings.
-pub fn set_tooltip<R: Runtime>(app: &AppHandle<R>, hotkey: Option<&str>) {
+/// Tooltip, icon dot, menu bar number (macOS) and window title after the
+/// global shortcut or an unread count changed. Reads the state, lets go of
+/// every lock, then talks to the tray and the window.
+pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
+    let state = app.state::<crate::AppState>();
+    let hotkey = state.hotkey.lock().unwrap().clone();
+    let lines = crate::unread_lines(&state);
+
+    let mut tip = tooltip(hotkey.as_deref());
+    for (label, u) in &lines {
+        tip.push('\n');
+        tip.push_str(&format!("{label}: {}", u.text()));
+    }
+    // Windows cuts tooltips at 127 characters.
+    if tip.chars().count() > 120 {
+        tip = tip.chars().take(119).collect::<String>() + "…";
+    }
+    let total = unread::total(lines.iter().flat_map(|(_, u)| [u.n.as_str(), u.dm.as_str()]));
+
+    // Last values handed out, so nothing is set again when only one count moved.
+    static LAST: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
+    let now = (tip.clone(), total.clone());
+    let prev = {
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::replace(&mut *last, Some(now.clone()))
+    };
+    if prev.as_ref() == Some(&now) {
+        return;
+    }
+    let dot_changed = prev.as_ref().is_none_or(|p| p.1.is_empty() != total.is_empty());
+
     if let Some(t) = app.tray_by_id("main") {
-        let _ = t.set_tooltip(Some(tooltip(hotkey)));
+        let _ = t.set_tooltip(Some(&tip));
+        if dot_changed {
+            if let Some(icon) = app.default_window_icon() {
+                let img = if total.is_empty() {
+                    icon.clone().to_owned()
+                } else {
+                    let rgba = unread::with_dot(icon.rgba(), icon.width(), icon.height());
+                    tauri::image::Image::new_owned(rgba, icon.width(), icon.height())
+                };
+                if let Err(e) = t.set_icon(Some(img)) {
+                    log::warn!("tray icon not updated: {e}");
+                }
+            }
+        }
+        // macOS: the number next to the menu bar icon. Not on Windows.
+        #[cfg(target_os = "macos")]
+        let _ = t.set_title(if total.is_empty() { None } else { Some(total.as_str()) });
+    }
+    // Taskbar / Dock window list, like a browser tab: "(3) Paneful".
+    if let Some(w) = app.get_window(MAIN) {
+        let title = if total.is_empty() { "Paneful".to_string() } else { format!("({total}) Paneful") };
+        let _ = w.set_title(&title);
     }
 }
 

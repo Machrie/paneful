@@ -66,6 +66,7 @@ function stripTitle() {
   const bar = keyText("bar");
   const help = keyText("help");
   stripEl.title = [
+    ...L.panels.filter((p) => unreadText(p)).map((p) => `${p.label}: ${unreadText(p)}`),
     L.update_notice && `새 버전 v${L.update_notice} 있음`,
     `클릭${bar ? ` 또는 ${bar}` : ""}: 상단 바 표시`,
     help && `${help}: 단축키`,
@@ -73,6 +74,13 @@ function stripTitle() {
     .filter(Boolean)
     .join(" · ");
 }
+
+// ---- unread counts (what X shows in each panel, see src-tauri/src/unread.rs)
+function unreadText(p) {
+  const u = p.unread || {};
+  return [u.n && `알림 ${u.n}`, u.dm && `쪽지 ${u.dm}`].filter(Boolean).join(" · ");
+}
+const pct = (z) => Math.round(z * 100);
 
 // ---- new version notice (top bar pill, strip mark, settings section)
 let updateShape = "";
@@ -205,6 +213,18 @@ function build() {
     const key = document.createElement("span");
     key.className = "key";
     if (i < 9) key.textContent = `${MOD} ${i + 1}`;
+    // Unread badges (filled in by place()).
+    const bn = document.createElement("span");
+    bn.className = "badge";
+    bn.hidden = true;
+    const bdm = document.createElement("span");
+    bdm.className = "badge dm";
+    bdm.hidden = true;
+    // Zoom other than 100%: "90%", click = back to 100%.
+    const zoom = document.createElement("button");
+    zoom.className = "scale";
+    zoom.hidden = true;
+    zoom.onclick = () => invoke("shortcut", { action: "zoom_reset", index: i }).catch(showError);
 
     const normal = document.createElement("span");
     normal.className = "group";
@@ -242,7 +262,7 @@ function build() {
     yes.classList.add("danger");
     ask.append(msg, yes, pill("취소", cancel));
 
-    t.append(dot, name, key, normal, ask);
+    t.append(dot, name, bn, bdm, key, zoom, normal, ask);
     tabsEl.append(t);
 
     if (i < L.panels.length - 1) {
@@ -254,7 +274,13 @@ function build() {
   });
 }
 
+let unreadShape = "";
 function place() {
+  const us = L.panels.map(unreadText).join("\u0001");
+  if (us !== unreadShape) {
+    unreadShape = us;
+    stripTitle();
+  }
   const pad = 8; // #bar padding-left
   // Zoomed: one panel fills the window, so tabs and strip segments share
   // the width evenly (a click still switches which panel is shown).
@@ -267,10 +293,24 @@ function place() {
     t.style.left = L.zoom ? `${i * tabW}px` : `${p.rect.x - pad}px`;
     t.style.width = L.zoom ? `${tabW}px` : `${p.rect.w}px`;
     t.classList.toggle("active", p.active);
+    const u = p.unread || {};
+    const [bn, bdm] = t.querySelectorAll(".badge");
+    bn.hidden = !u.n;
+    bn.textContent = u.n || "";
+    bn.title = u.n ? `새 알림 ${u.n}` : "";
+    bdm.hidden = !u.dm;
+    bdm.textContent = u.dm ? `쪽지 ${u.dm}` : "";
+    bdm.title = u.dm ? `안 읽은 쪽지 ${u.dm}` : "";
+    const zb = t.querySelector(".scale");
+    const z = pct(p.zoom || 1);
+    zb.hidden = z === 100;
+    zb.textContent = `${z}%`;
+    zb.title = `이 패널 배율 ${z}% · 누르면 100%`;
     const seg = stripEl.children[i];
     seg.style.left = L.zoom ? `${i * (segW + L.gap)}px` : `${p.rect.x}px`;
     seg.style.width = L.zoom ? `${segW}px` : `${p.rect.w}px`;
     seg.classList.toggle("active", p.active);
+    seg.classList.toggle("unread", !!unreadText(p));
     const d = divsEl.children[i];
     if (d) {
       d.style.left = `${p.rect.x + p.rect.w}px`;
@@ -347,6 +387,8 @@ function startDrag(e, el, i) {
 // ---- shortcut overlay
 // Fixed: Ctrl/Cmd+V in a panel outside text fields (panel.js, paste_link).
 const PASTE_LABEL = "복사한 X 링크 열기 (입력창 밖)";
+// Fixed: Ctrl/Cmd + wheel in a panel (panel.js), same steps as the zoom keys.
+const WHEEL_LABEL = "패널 배율 키우기/줄이기 (휠)";
 const KEY_LABELS = {
   global: "창 숨기기/불러오기 (전역)",
   next: "다음 패널",
@@ -357,6 +399,9 @@ const KEY_LABELS = {
   send: "다른 패널에서 열기 (마우스 아래 게시물)",
   zoom: "패널 크게 보기 / 되돌리기",
   settings: "설정",
+  zoom_in: "패널 배율 키우기",
+  zoom_out: "패널 배율 줄이기",
+  zoom_reset: "패널 배율 100%",
 };
 // X's own shortcuts, only the ones that agree across several public lists
 // (X has no current official page for them). Work in the focused panel.
@@ -406,7 +451,7 @@ function fillKeys(dl, rows) {
 function buildKeys() {
   const dl = $("app-keys");
   dl.replaceChildren();
-  const rows = [[[MOD, "1–9"], "N번째 패널로 포커스"], [[MOD, "V"], PASTE_LABEL]];
+  const rows = [[[MOD, "1–9"], "N번째 패널로 포커스"], [[MOD, "V"], PASTE_LABEL], [[MOD, "휠"], WHEEL_LABEL]];
   for (const k of L.keys) if (k.caps.length) rows.push([k.caps, KEY_LABELS[k.id]]);
   fillKeys(dl, rows);
   if (L.hotkey.length) {
@@ -475,6 +520,7 @@ function buildSettings() {
   for (const [label, keys] of [
     ["N번째 패널로 포커스", [MOD, "1–9"]],
     [PASTE_LABEL, [MOD, "V"]],
+    [WHEEL_LABEL, [MOD, "휠"]],
   ]) {
     const row = document.createElement("div");
     row.className = "keyrow";

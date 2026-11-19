@@ -37,6 +37,13 @@ svg { display: block; width: 16px; height: 16px; fill: none; stroke: currentColo
 .tab:hover .name { color: var(--fg); }
 .tab.active .name { color: var(--fg); font-weight: 700; }
 .tab .key { font-size: 11px; color: var(--muted); opacity: .7; }
+/* Unread counts X shows in that panel, and a zoom other than 100%. */
+.tab .badge { flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--danger); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+.tab .badge.dm { background: none; color: var(--accent); border: 1px solid var(--accent); line-height: 16px; }
+.tab .scale { flex: none; height: 18px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--line);
+  color: var(--muted); font-size: 11px; font-weight: 700; }
+.tab .scale:hover { color: var(--fg); background: var(--hover); }
 .tab .group { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 /* Reload/delete only on hover (or while confirming a delete). */
 .tab .group:not(.ask) { opacity: 0; transition: opacity .15s; }
@@ -65,6 +72,11 @@ svg { display: block; width: 16px; height: 16px; fill: none; stroke: currentColo
   opacity: .6; transition: opacity .15s, background .15s; }
 #strip .seg.active { background: var(--c); opacity: 1; }
 #strip:hover .seg:not(.active) { opacity: 1; }
+/* Something unread in that panel: red at the left end of its segment
+   (the right end of the strip is the new version mark). */
+#strip .seg.unread { opacity: 1; }
+#strip .seg.unread::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 28px;
+  border-radius: 3px; background: var(--danger); }
 
 /* ---- dividers (the gaps between panels are drag handles) */
 .divider { position: fixed; top: var(--top); bottom: 0; cursor: col-resize; }
