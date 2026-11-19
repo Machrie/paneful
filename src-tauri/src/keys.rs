@@ -14,12 +14,17 @@ use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 pub const GLOBAL: &str = "global";
 
 /// In-app shortcuts: (id, default). Panel focus (Ctrl/Cmd+1..9) is fixed.
-pub const APP: [(&str, &str); 6] = [
+pub const APP: [(&str, &str); 8] = [
     ("next", "Control+Tab"),
     ("prev", "Control+Shift+Tab"),
     ("bar", "CommandOrControl+Shift+H"),
     ("help", "CommandOrControl+Slash"),
     ("capture", "CommandOrControl+Shift+S"),
+    // The post under the pointer (or X's j/k selection, or the page) in
+    // another panel. Handled in panel.js, which knows the post.
+    ("send", "CommandOrControl+Shift+O"),
+    // Active panel fills the window, again to go back.
+    ("zoom", "CommandOrControl+Shift+F"),
     ("settings", "CommandOrControl+Comma"),
 ];
 
@@ -193,6 +198,8 @@ pub fn label(id: &str) -> &'static str {
         "bar" => "상단 바 보이기/숨기기",
         "help" => "단축키 창",
         "capture" => "게시물 캡쳐",
+        "send" => "다른 패널에서 열기",
+        "zoom" => "패널 하나만 크게 보기",
         "settings" => "설정",
         _ => "?",
     }

@@ -37,12 +37,16 @@ const ICONS = {
   eyeOff: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c5 0 9 4.5 10 7a13 13 0 0 1-2.9 3.9M6.6 6.6C4.3 8 2.6 10.2 2 12c1 2.5 5 7 10 7a9.6 9.6 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   gear: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  pencil: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>',
+  arrowLeft: '<svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>',
+  arrowRight: '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>',
   camera: '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg>',
 };
 function setIcon(el, name) {
   el.innerHTML = ICONS[name];
 }
 document.querySelectorAll("[data-icon]").forEach((el) => setIcon(el, el.dataset.icon));
+document.querySelectorAll(".modkey").forEach((el) => (el.textContent = MOD));
 // Button tooltips name the configured keys, so they follow the layout.
 const keyText = (id) => {
   const k = L && L.keys.find((v) => v.id === id);
@@ -168,6 +172,7 @@ function render() {
   if (s !== shape) {
     shape = s;
     build();
+    buildPanels();
   }
   renderUpdate();
   place();
@@ -213,6 +218,7 @@ function build() {
     });
     del.classList.add("danger");
     normal.append(
+      Object.assign(iconButton("pencil", "이름·순서 바꾸기 (설정)", () => toggleSettings()), { className: "icon to-settings" }),
       iconButton("reload", "새로고침", () => invoke("reload_panel", { id: p.id }).catch(showError)),
       del,
     );
@@ -250,14 +256,20 @@ function build() {
 
 function place() {
   const pad = 8; // #bar padding-left
+  // Zoomed: one panel fills the window, so tabs and strip segments share
+  // the width evenly (a click still switches which panel is shown).
+  const n = L.panels.length;
+  const tabW = L.zoom ? tabsEl.clientWidth / n : 0;
+  const segW = L.zoom ? (L.win_w - L.gap * (n - 1)) / n : 0;
+  divsEl.hidden = L.zoom;
   L.panels.forEach((p, i) => {
     const t = tabsEl.children[i];
-    t.style.left = `${p.rect.x - pad}px`;
-    t.style.width = `${p.rect.w}px`;
+    t.style.left = L.zoom ? `${i * tabW}px` : `${p.rect.x - pad}px`;
+    t.style.width = L.zoom ? `${tabW}px` : `${p.rect.w}px`;
     t.classList.toggle("active", p.active);
     const seg = stripEl.children[i];
-    seg.style.left = `${p.rect.x}px`;
-    seg.style.width = `${p.rect.w}px`;
+    seg.style.left = L.zoom ? `${i * (segW + L.gap)}px` : `${p.rect.x}px`;
+    seg.style.width = L.zoom ? `${segW}px` : `${p.rect.w}px`;
     seg.classList.toggle("active", p.active);
     const d = divsEl.children[i];
     if (d) {
@@ -342,6 +354,8 @@ const KEY_LABELS = {
   bar: "상단 바 보이기/숨기기",
   help: "이 단축키 창",
   capture: "게시물 캡쳐 (첫 → 마지막 게시물 클릭)",
+  send: "다른 패널에서 열기 (마우스 아래 게시물)",
+  zoom: "패널 크게 보기 / 되돌리기",
   settings: "설정",
 };
 // X's own shortcuts, only the ones that agree across several public lists
@@ -476,6 +490,67 @@ function buildSettings() {
     row.append(name, caps, note);
     box.append(row);
   }
+}
+
+// ---- settings: panel names and order
+function buildPanels() {
+  const box = $("panel-rows");
+  box.replaceChildren();
+  const n = L.panels.length;
+  if (!n) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "패널 없음 (상단 바의 ＋ 계정으로 추가)";
+    box.append(p);
+    return;
+  }
+  L.panels.forEach((p, i) => {
+    const row = document.createElement("div");
+    row.className = "panelrow";
+    const num = document.createElement("span");
+    num.className = "pnum";
+    num.style.setProperty("--c", p.color);
+    num.textContent = i < 9 ? `${MOD} ${i + 1}` : "";
+    const input = document.createElement("input");
+    input.className = "pname";
+    input.type = "text";
+    input.value = p.label;
+    input.maxLength = 30;
+    input.spellcheck = false;
+    const save = async () => {
+      const v = input.value.trim();
+      if (v === p.label) return;
+      try {
+        await invoke("rename_account", { id: p.id, label: v });
+        settingsMsg(`이름 바뀜: ${v}`);
+      } catch (e) {
+        settingsMsg(e, true);
+        input.value = p.label;
+      }
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.isComposing) return; // Korean IME: Enter ends the syllable first
+      if (e.code === "Enter" || e.code === "NumpadEnter") {
+        e.preventDefault();
+        input.blur();
+      } else if (e.code === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        input.value = p.label;
+        input.blur();
+      }
+    });
+    input.addEventListener("blur", save);
+    const move = (to, icon, title) => {
+      const b = iconButton(icon, title, () =>
+        invoke("move_account", { id: p.id, to }).catch((e) => settingsMsg(e, true)),
+      );
+      b.disabled = to < 0 || to >= n;
+      return b;
+    };
+    row.append(num, input, move(i - 1, "arrowLeft", "왼쪽으로"), move(i + 1, "arrowRight", "오른쪽으로"));
+    box.append(row);
+  });
 }
 
 function kbds(keys) {
@@ -615,7 +690,7 @@ stripEl.onclick = toggleBar;
 // shortcuts keep working without clicking back into it. Runs after the
 // button handlers (bubble phase on document).
 document.addEventListener("click", (e) => {
-  if (e.target.closest("#help, #tray, #settings-btn, #capture")) return; // overlays keep focus here; tray hides the window; capture focuses the panel
+  if (e.target.closest("#help, #tray, #settings-btn, #capture, .to-settings")) return; // overlays keep focus here; tray hides the window; capture focuses the panel
   if (L && L.panels.length && !L.help && !L.settings && !L.capture) invoke("shortcut", { action: "refocus" }).catch(() => {});
 });
 
@@ -632,6 +707,8 @@ function keyOf(e) {
   if (mod && !e.shiftKey && !e.altKey && /^Digit[1-9]$/.test(e.code)) {
     return { action: "focus", index: Number(e.code.slice(5)) - 1 };
   }
+  // Esc in a settings text field (panel name) belongs to the field.
+  if (e.code === "Escape" && e.target instanceof HTMLInputElement && e.target.type === "text") return null;
   if (e.code === "Escape") {
     if (L.help) return { action: "help" };
     if (L.settings) return { action: "settings" };
@@ -644,7 +721,7 @@ window.addEventListener(
     const a = keyOf(e);
     if (!a) return;
     e.preventDefault();
-    if (e.repeat && ["bar", "help", "settings", "capture"].includes(a.action)) return;
+    if (e.repeat && ["bar", "help", "settings", "capture", "zoom", "send"].includes(a.action)) return;
     invoke("shortcut", a).catch(showError);
   },
   true,

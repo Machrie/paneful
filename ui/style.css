@@ -144,6 +144,15 @@ button.kcaps:hover { border-color: var(--line); background: var(--hover); }
 #cap-msg.error { color: var(--danger); }
 #cap-view { flex: 1; overflow: auto; padding: 0 16px 24px; display: flex; flex-direction: column; align-items: center; }
 #cap-view canvas { display: block; max-width: 100%; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+/* ---- settings: panel names and order */
+#panel-rows { display: grid; grid-template-columns: auto 1fr auto auto; gap: 6px 8px; align-items: center; }
+.panelrow { display: contents; }
+.pnum { display: flex; align-items: center; gap: 6px; min-width: 64px; color: var(--muted); font-size: 12px; }
+.pnum::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
+.pname { min-width: 0; padding: 6px 10px; border-radius: 8px; background: var(--surface); color: var(--fg);
+  border: 1px solid var(--line); font: inherit; user-select: text; -webkit-user-select: text; }
+.pname:focus { outline: none; border-color: var(--accent); }
+.icon:disabled { opacity: .3; cursor: default; background: none; }
 /* ---- panel memory (settings) */
 #mem-rows { display: grid; grid-template-columns: 1fr auto auto; gap: 6px 10px; align-items: center; }
 .memrow { display: contents; }
