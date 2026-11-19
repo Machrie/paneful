@@ -13,6 +13,7 @@ mod media;
 mod nav;
 mod settings;
 mod tray;
+mod update;
 
 use serde::Serialize;
 use settings::{Account, Persist, Settings, COLORS};
@@ -49,6 +50,8 @@ pub(crate) struct AppState {
     hotkey: Mutex<Option<String>>,
     /// Why the shortcut isn't registered (start or last change attempt).
     hotkey_error: Mutex<Option<String>>,
+    /// Last new version check (update.rs).
+    update: Mutex<update::Status>,
     path: PathBuf,
     persist: Persist,
 }
@@ -105,6 +108,16 @@ struct LayoutPayload {
     /// Save folder in effect, and whether it is the default one.
     save_dir: String,
     save_dir_default: bool,
+    /// This build's version, for settings.
+    version: String,
+    /// New version check turned on in settings.
+    update_check: bool,
+    /// Newer version to announce in the top bar / strip (not skipped).
+    update_notice: Option<String>,
+    /// Last check, for the settings screen.
+    update: update::Status,
+    /// Version the user skipped.
+    skip_version: Option<String>,
 }
 
 /// Bar is forced on with no accounts, otherwise "+ 계정" would be unreachable
@@ -143,6 +156,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
     let hotkey = state.hotkey.lock().unwrap().clone();
     let hotkey_error = state.hotkey_error.lock().unwrap().clone();
     let capture = *state.capture.lock().unwrap();
+    let up = state.update.lock().unwrap().clone();
     let (w, h) = logical_size(&window);
     let top = top_of(&s);
     let rects = layout::panels(w, h, top, &s.ratios);
@@ -190,6 +204,11 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
         keys: keys::views(&s.keys),
         save_dir: media::save_dir(app).map(|d| d.display().to_string()).unwrap_or_default(),
         save_dir_default: s.save_dir.is_none(),
+        version: update::current(app),
+        update_check: s.update_check,
+        update_notice: update::notice(&s, &up),
+        update: up,
+        skip_version: s.skip_version.clone(),
     };
     let _ = app.emit_to(HOST, "layout", payload);
 }
@@ -789,6 +808,56 @@ async fn open_save_dir(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------------- update
+
+/// "지금 확인" in settings. Returns once the check is done; the result
+/// arrives with the next layout event.
+#[tauri::command]
+async fn check_update(app: AppHandle) {
+    update::check(&app, true).await;
+}
+
+/// Settings checkbox: look for new versions at all.
+#[tauri::command]
+async fn set_update_check(app: AppHandle, state: State<'_, AppState>, on: bool) -> Result<(), String> {
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        s.update_check = on;
+        s.clone()
+    };
+    state.save(&snapshot);
+    update::publish(&app);
+    if on {
+        let found = state.update.lock().unwrap().newer.is_some();
+        if !found {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move { update::check(&app, false).await });
+        }
+    }
+    Ok(())
+}
+
+/// "이 버전 건너뛰기": no more notices for the version on offer. `undo`
+/// clears the skip again.
+#[tauri::command]
+async fn skip_update(app: AppHandle, state: State<'_, AppState>, undo: Option<bool>) -> Result<(), String> {
+    let newer = state.update.lock().unwrap().newer.clone();
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        s.skip_version = if undo.unwrap_or(false) { None } else { newer.or(s.skip_version.take()) };
+        s.clone()
+    };
+    state.save(&snapshot);
+    update::publish(&app);
+    Ok(())
+}
+
+/// Release page in the system browser.
+#[tauri::command]
+async fn open_update(app: AppHandle) -> Result<(), String> {
+    update::open(&app)
+}
+
 // ---------------------------------------------------------------- entry
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -835,6 +904,7 @@ pub fn run() {
                 hotkey: Mutex::new(hotkey),
                 hotkey_error: Mutex::new(hotkey_error),
                 capture: Mutex::new(false),
+                update: Mutex::new(update::Status::default()),
                 path,
                 persist,
             };
@@ -856,6 +926,8 @@ pub fn run() {
             if let Err(e) = tray::create(app.handle(), hotkey.as_deref()) {
                 log::error!("tray icon failed: {e}");
             }
+            // New version check, off the main thread (update.rs).
+            update::spawn(app.handle());
 
             // Host UI first so the panels stack above it; it stays visible
             // in the top bar and in the gaps between panels.
@@ -914,7 +986,11 @@ pub fn run() {
             capture::capture_finish,
             capture::capture_close,
             capture::capture_slice,
-            capture::capture_export
+            capture::capture_export,
+            check_update,
+            set_update_check,
+            skip_update,
+            open_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running paneful");

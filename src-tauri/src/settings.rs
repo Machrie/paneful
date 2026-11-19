@@ -64,6 +64,16 @@ pub struct Settings {
     /// Folder for downloaded media and captures. Missing = <Downloads>/Paneful.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub save_dir: Option<String>,
+    /// Look for a newer release on GitHub at start and every few hours.
+    #[serde(default = "yes")]
+    pub update_check: bool,
+    /// Release the user chose to skip ("0.0.5"): no notice for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_version: Option<String>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Ctrl+Alt+X (Windows) / Cmd+Option+X (macOS). Not an X shortcut (those
@@ -97,6 +107,8 @@ impl Default for Settings {
             hotkey: None,
             keys: BTreeMap::new(),
             save_dir: None,
+            update_check: true,
+            skip_version: None,
         }
     }
 }
@@ -159,6 +171,8 @@ impl Settings {
             hotkey: field(&v, "hotkey"),
             keys: field(&v, "keys"),
             save_dir: field(&v, "save_dir"),
+            update_check: v.get("update_check").and_then(|x| x.as_bool()).unwrap_or(true),
+            skip_version: field(&v, "skip_version"),
         })
     }
 
@@ -284,6 +298,7 @@ mod tests {
         let l: Settings = serde_json::from_value(v).unwrap();
         assert_eq!(l.hotkey(), Some(DEFAULT_HOTKEY));
         assert!(l.keys.is_empty() && l.save_dir.is_none());
+        assert!(l.update_check && l.skip_version.is_none());
     }
 
     #[test]
