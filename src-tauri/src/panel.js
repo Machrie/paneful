@@ -6,9 +6,9 @@
 // 3. Ctrl/Cmd+V outside a text field: ask Rust for the X link on the
 //    clipboard (Rust reads the clipboard, not the page), ask the user, then
 //    open it in this panel
-// 4. "다른 패널에서 열기": send the post under the pointer (or the one X's
-//    j/k selected, or this page) to another panel, asking which one when
-//    there are several
+// 4. "다른 패널에서 열기": the shortcut, then a click on a post (or Enter
+//    for this page) sends it to another panel; with several others the
+//    panel layout is drawn to pick one
 // 5. window hidden to the tray: pause every video/audio, and keep new ones
 //    from starting until it is back (sound must not leak while hidden)
 // 6. read the unread counts X already shows (badges on the 알림 / 쪽지
@@ -89,7 +89,7 @@
       // Holding a toggle key would flip it on and off; only the first press counts.
       if (e.repeat && ["bar", "help", "settings", "capture", "zoom", "send"].includes(a.action)) return;
       // This page knows which post is meant; Rust only opens it.
-      if (a.action === "send") send();
+      if (a.action === "send") startPick();
       else call("shortcut", a).catch(() => {});
     },
     true,
@@ -186,7 +186,7 @@
   // (not over an open "go there?" question).
   window.addEventListener("paneful-zoom", (e) => {
     const p = Number(e.detail);
-    if (!pending && p > 0) say(`배율 ${p}%`, 1200);
+    if (!pending && !picking && p > 0) say(`배율 ${p}%`, 1200);
   });
   const ask = (url) => {
     ensureUi();
@@ -203,66 +203,178 @@
     show();
   };
   // ---- open in another panel
-  // The post meant: the one under the pointer, else the one X's j/k
-  // selected (it has focus), else this page. Post = <article>, its address
-  // = the link around its time stamp (same rule as media.js).
+  // The shortcut starts a pick: the posts get a frame under the pointer and
+  // a click on one (anywhere on it: X doesn't see that click) sends its
+  // address, the link around its time stamp (same rule as media.js). Enter
+  // sends this page instead, Esc or the shortcut again cancels. With one
+  // other panel the post opens there at once; with more, the panel layout
+  // is drawn and the panel is picked on it (click or 1-9).
+  let picking = false;
   let hovered = null;
-  document.addEventListener(
-    "mouseover",
-    (e) => {
-      const t = e.target;
-      if (t instanceof Element && !(ui && t === ui.host)) hovered = t.closest(S("post"));
-    },
-    true,
-  );
-  // Pointer left the panel (no element it went to).
-  document.addEventListener("mouseout", (e) => {
-    if (!e.relatedTarget) hovered = null;
-  });
+  let frameUi = null; // { host, box }
+  const ensureFrame = () => {
+    if (frameUi) return frameUi;
+    const host = document.createElement("div");
+    host.style.cssText = "all:initial;position:fixed;inset:0;z-index:2147483646;pointer-events:none;";
+    const box = document.createElement("div");
+    box.style.cssText =
+      "position:fixed;box-sizing:border-box;border:2px solid #1d9bf0;border-radius:6px;" +
+      "background:rgba(29,155,240,.08);display:none;pointer-events:none;";
+    host.attachShadow({ mode: "closed" }).append(box);
+    frameUi = { host, box };
+    return frameUi;
+  };
+  const drawFrame = () => {
+    if (!frameUi) return;
+    const r = picking && hovered && hovered.isConnected ? hovered.getBoundingClientRect() : null;
+    if (!r || r.width <= 0) return void (frameUi.box.style.display = "none");
+    Object.assign(frameUi.box.style, {
+      display: "block",
+      left: `${r.left}px`,
+      top: `${r.top}px`,
+      width: `${r.width}px`,
+      height: `${r.height}px`,
+    });
+  };
+  const postAt = (t) => (t instanceof Element && !(ui && t === ui.host) ? t.closest(S("post")) : null);
   const postUrl = (art) => {
     if (!art || !art.isConnected) return null;
     const t = [...art.querySelectorAll(S("statusLink"))].map((l) => l.querySelector("time")).find(Boolean);
     const a = t && t.closest("a");
     return a && a.href ? a.href : null;
   };
-  const target = () => {
-    const sel = document.activeElement && document.activeElement.closest ? document.activeElement.closest(S("post")) : null;
-    return postUrl(hovered) || postUrl(sel) || location.href;
+  // The hint stays up (no timer) until the pick ends.
+  const hint = () => {
+    say("다른 패널에서 열기: 열 게시물을 클릭 · 지금 페이지는 Enter · 취소 Esc", 1e9);
   };
+  const startPick = () => {
+    if (capturing()) return;
+    if (picking) return stopPick("취소");
+    hide();
+    picking = true;
+    const f = ensureFrame();
+    if (!f.host.isConnected) document.documentElement.appendChild(f.host);
+    drawFrame();
+    hint();
+  };
+  const stopPick = (msg) => {
+    if (!picking) return;
+    picking = false;
+    if (frameUi) frameUi.host.remove();
+    if (msg) say(msg, 1500);
+    else hide();
+  };
+  window.addEventListener("paneful-send", startPick);
+  // The capture pick takes over the same clicks: never both at once.
+  window.addEventListener("paneful-capture", () => stopPick());
+  // Tracked all the time, so the post already under the pointer when the
+  // shortcut is pressed gets its frame at once.
+  document.addEventListener(
+    "mouseover",
+    (e) => {
+      hovered = postAt(e.target);
+      if (picking) drawFrame();
+    },
+    true,
+  );
+  // Pointer left the panel (no element it went to).
+  document.addEventListener("mouseout", (e) => {
+    if (e.relatedTarget) return;
+    hovered = null;
+    if (picking) drawFrame();
+  });
+  window.addEventListener("scroll", () => picking && drawFrame(), true);
+  window.addEventListener("resize", () => picking && drawFrame());
+  // Clicks on a post while picking are ours (X would open it); clicks
+  // elsewhere (scrolling, the sidebar) stay X's.
+  for (const t of ["pointerdown", "mousedown", "pointerup", "mouseup", "click", "auxclick"]) {
+    window.addEventListener(
+      t,
+      (e) => {
+        if (!picking) return;
+        if (ui && e.composedPath().includes(ui.host)) return;
+        const art = postAt(e.target);
+        if (!art) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (t !== "click" || !e.isTrusted || e.button !== 0) return;
+        const url = postUrl(art);
+        if (!url) return void say("이 게시물은 주소를 못 찾음 · 다른 게시물을 클릭 · 취소 Esc", 1e9);
+        stopPick();
+        sendTo(url);
+      },
+      true,
+    );
+  }
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (!picking) return;
+      const enter = e.code === "Enter" || e.code === "NumpadEnter";
+      if (!enter && e.code !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (e.repeat) return;
+      stopPick(enter ? null : "취소");
+      if (enter) sendTo(location.href);
+    },
+    true,
+  );
   let choosing = null; // { url, targets } while asking which panel
   const sendTo = (url, to) =>
     call("send_link", { url, to: to || null }).then((r) => {
       if (r && r.to) say(`${r.to}에서 엶`);
-      else if (r && r.targets && r.targets.length) choose(url, r.targets);
+      else if (r && r.targets && r.targets.length) choose(url, r.targets, r.me);
       else if (r && r.msg) say(r.msg);
     }, (e) => say(String(e || "열지 못함")));
-  const send = () => {
-    if (window[Symbol.for("paneful.capturing")]) return;
-    sendTo(target());
-  };
-  window.addEventListener("paneful-send", send);
-  const choose = (url, targets) => {
+  // The panel layout as it is on screen (same order and widths), this
+  // panel greyed out, the others clickable.
+  const choose = (url, targets, me) => {
     ensureUi();
     pending = null;
     clearTimeout(msgTimer);
-    ui.text.textContent = "어느 패널에서 열까? (숫자 키로 골라도 됨)";
+    ui.text.textContent = "어느 패널에서 열까? (클릭 또는 숫자 키 · 취소 Esc)";
     ui.addr.textContent = url.replace(/^https:\/\//, "");
     ui.addr.title = url;
     ui.addr.style.display = "block";
     ui.row.style.display = "none";
     ui.pick.replaceChildren();
-    for (const t of targets) {
-      const b = ui.btn(`${t.index + 1} · ${t.label}`, false);
-      b.style.borderColor = t.color;
-      b.onclick = () => {
-        hide();
-        sendTo(url, t.id);
-      };
-      ui.pick.append(b);
+    const all = [...targets, ...(me ? [me] : [])].sort((a, b) => a.index - b.index);
+    const map = document.createElement("div");
+    map.style.cssText = "display:flex;gap:6px;width:min(520px,84vw);height:110px;";
+    for (const t of all) {
+      const self = me && t.id === me.id;
+      const cell = document.createElement(self ? "div" : "button");
+      if (!self) cell.type = "button";
+      const share = Number(t.share) > 0 ? Number(t.share) : 1;
+      cell.style.cssText =
+        FONT + `flex:${share} 1 0;min-width:44px;box-sizing:border-box;border-radius:10px;padding:6px;` +
+        "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;overflow:hidden;" +
+        `border:2px solid ${self ? "#38444d" : t.color};` +
+        (self ? "background:rgba(255,255,255,.04);color:#6e767d;cursor:default;" : "background:#15202b;color:#eff3f4;cursor:pointer;");
+      const num = document.createElement("div");
+      num.textContent = String(t.index + 1);
+      num.style.cssText = "font-size:22px;line-height:1;";
+      const name = document.createElement("div");
+      name.textContent = self ? `${t.label} (여기)` : t.label;
+      name.style.cssText = "font-weight:400;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+      cell.append(num, name);
+      if (!self) {
+        cell.onmouseenter = () => (cell.style.background = "#1e2d3b");
+        cell.onmouseleave = () => (cell.style.background = "#15202b");
+        cell.onclick = () => {
+          hide();
+          sendTo(url, t.id);
+        };
+      }
+      map.append(cell);
     }
     const no = ui.btn("취소 (Esc)", false);
     no.onclick = hide;
-    ui.pick.append(no);
+    const foot = document.createElement("div");
+    foot.style.cssText = "display:flex;justify-content:flex-end;width:100%;";
+    foot.append(no);
+    ui.pick.append(map, foot);
     ui.pick.style.display = "flex";
     choosing = { url, targets };
     place(true);
@@ -321,7 +433,7 @@
       if (!(mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey)) return;
       if (editable(e.target) || editable(document.activeElement)) return;
       // Picking posts for a capture: a page change would drop the picks.
-      if (window[Symbol.for("paneful.capturing")]) return;
+      if (window[Symbol.for("paneful.capturing")] || picking) return;
       call("paste_link").then((r) => {
         if (r && r.url) ask(r.url);
         else if (r && r.msg) say(r.msg);

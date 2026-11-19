@@ -925,6 +925,8 @@ struct Target {
     color: String,
     /// Place on screen, from 0 (Ctrl/Cmd+1 is 0).
     index: usize,
+    /// Share of the window width (the panel layout drawn when asking).
+    share: f64,
 }
 
 /// What panel.js does after send_link.
@@ -934,6 +936,8 @@ struct Sent {
     to: Option<String>,
     /// More than one other panel: ask which one.
     targets: Vec<Target>,
+    /// With `targets`: the calling panel, so the layout can be drawn whole.
+    me: Option<Target>,
     msg: Option<String>,
 }
 
@@ -943,22 +947,24 @@ struct Sent {
 /// is held while touching webviews. The caller is the panel by its label.
 #[tauri::command]
 async fn send_link(app: AppHandle, state: State<'_, AppState>, webview: Webview, url: String, to: Option<String>) -> Result<Sent, String> {
-    let (me, others): (Uuid, Vec<(Uuid, Target)>) = {
+    let (me, mine, others): (Uuid, Target, Vec<(Uuid, Target)>) = {
         let s = state.settings.lock().unwrap();
-        let me = s
-            .accounts
-            .iter()
-            .find(|a| panel_label(a) == webview.label())
-            .map(|a| a.id)
-            .ok_or("not a panel")?;
-        let others = s
+        let sum: f64 = s.ratios.iter().sum();
+        let mut all: Vec<(Uuid, Target)> = s
             .accounts
             .iter()
             .enumerate()
-            .filter(|(_, a)| a.id != me)
-            .map(|(i, a)| (a.id, Target { id: a.id.to_string(), label: a.label.clone(), color: a.color.clone(), index: i }))
+            .map(|(i, a)| {
+                let share = match s.ratios.get(i) {
+                    Some(r) if sum > 0.0 => r / sum,
+                    _ => 1.0 / s.accounts.len() as f64,
+                };
+                (a.id, Target { id: a.id.to_string(), label: a.label.clone(), color: a.color.clone(), index: i, share })
+            })
             .collect();
-        (me, others)
+        let at = s.accounts.iter().position(|a| panel_label(a) == webview.label()).ok_or("not a panel")?;
+        let (me, mine) = all.remove(at);
+        (me, mine, all)
     };
     let url = nav::x_link(&url).map_err(|_| "X 링크가 아님".to_string())?;
     let pick = match &to {
@@ -966,7 +972,7 @@ async fn send_link(app: AppHandle, state: State<'_, AppState>, webview: Webview,
         None => match others.len() {
             0 => return Ok(Sent { msg: Some("다른 패널이 없음 · 상단 바의 ＋ 계정으로 추가".into()), ..Default::default() }),
             1 => &others[0],
-            _ => return Ok(Sent { targets: others.into_iter().map(|(_, t)| t).collect(), ..Default::default() }),
+            _ => return Ok(Sent { targets: others.into_iter().map(|(_, t)| t).collect(), me: Some(mine), ..Default::default() }),
         },
     };
     let (id, label) = (pick.0, pick.1.label.clone());
