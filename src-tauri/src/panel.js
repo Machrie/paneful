@@ -1,9 +1,11 @@
 // Injected into every x.com panel (main frame only) before x.com's own
-// scripts. Two jobs, nothing else:
+// scripts. Three jobs, nothing else:
 // 1. tell the app when this panel gets keyboard focus (active-panel marker)
 // 2. catch the app's own shortcuts before x.com sees them
+// 3. Ctrl/Cmd+V outside a text field: ask the app to open the X link on
+//    the clipboard in this panel (Rust reads the clipboard, not the page)
 // The panel capability only allows `panel_focused`, `shortcut`,
-// `panel_keys` (read the configured bindings) and, for capture.js,
+// `panel_keys` (read the configured bindings), `paste_link` and, for capture.js,
 // `capture_begin` / `capture_shot` / `capture_drop` / `capture_finish`.
 // Keep the key mapping in sync with ui/app.js.
 (() => {
@@ -51,6 +53,50 @@
     },
     true,
   );
+  // ---- paste a link to open it
+  // Only when the key goes to no text field: pasting into a post, the
+  // search box or a DM stays X's. The key itself is left alone (no
+  // preventDefault), so X's own paste handling is unchanged.
+  const NOT_TEXT = /^(checkbox|radio|button|submit|reset|range|color|file|image)$/i;
+  const editable = (el) => {
+    while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+    if (!(el instanceof Element)) return false;
+    if (el.isContentEditable) return true;
+    if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true;
+    if (el instanceof HTMLInputElement) return !NOT_TEXT.test(el.type || "");
+    return false;
+  };
+  let toast = null;
+  let toastTimer = 0;
+  const say = (text) => {
+    if (!toast) {
+      const host = document.createElement("div");
+      host.style.cssText = "all:initial;position:fixed;inset:auto 0 24px 0;z-index:2147483647;pointer-events:none;display:flex;justify-content:center;";
+      toast = document.createElement("div");
+      toast.style.cssText =
+        "max-width:90vw;font:600 13px/1.4 system-ui,-apple-system,'Segoe UI','Malgun Gothic',sans-serif;color:#fff;" +
+        "background:rgba(32,35,39,.95);border-radius:999px;padding:8px 16px;box-shadow:0 2px 12px rgba(0,0,0,.4);";
+      host.attachShadow({ mode: "closed" }).append(toast);
+      toast.host_ = host;
+    }
+    toast.textContent = text;
+    if (!toast.host_.isConnected) document.documentElement.appendChild(toast.host_);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.host_.remove(), 3000);
+  };
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.code !== "KeyV" || e.repeat || e.shiftKey || e.altKey) return;
+      if (!(mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey)) return;
+      if (editable(e.target) || editable(document.activeElement)) return;
+      // Picking posts for a capture: a page change would drop the picks.
+      if (window[Symbol.for("paneful.capturing")]) return;
+      call("paste_link").then((msg) => msg && say(msg), () => {});
+    },
+    true,
+  );
+
   window.addEventListener("focus", () => call("panel_focused").catch(() => {}));
   const ready = () => {
     if (document.hasFocus()) call("panel_focused").catch(() => {});
