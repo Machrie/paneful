@@ -1,4 +1,4 @@
-// Paneful: "원본 저장" button on post images and videos (x.com panels only).
+// Paneful: "다운" button (saves the original file) on post images and videos (x.com panels only).
 //
 // - Images: the <img> src on pbs.twimg.com/media, rewritten to name=orig in Rust.
 // - Videos: the page plays them through blob: streams, so the mp4 URL is read
@@ -91,19 +91,23 @@
   };
 
   // ------------------------------------------------ media under the pointer
-  function imageOf(el) {
+  // Only media uploaded to a post: the tweetPhoto box in timelines/threads,
+  // or the photo under the pointer in the photo viewer. Avatars, emoji, link
+  // cards and the rest of the post never match.
+  function imageOf(el, x, y) {
     const box = el.closest('[data-testid="tweetPhoto"]');
     if (box) {
       const img = box.querySelector("img");
-      if (img && IMG_RE.test(img.src)) return { box, src: img.src };
+      return img && IMG_RE.test(img.src) ? { box, src: img.src } : null;
     }
-    if (el.tagName === "IMG" && IMG_RE.test(el.src) && el.width >= 48) return { box: el, src: el.src };
-    // photo viewer: transparent overlays sit above the <img>
-    for (let a = el, i = 0; a && i < 4; a = a.parentElement, i++) {
-      const imgs = a.querySelectorAll ? a.querySelectorAll("img") : [];
-      const hits = [...imgs].filter((im) => IMG_RE.test(im.src) && im.width >= 48);
-      if (hits.length === 1) return { box: a, src: hits[0].src };
-      if (hits.length > 1) break;
+    const modal = el.closest('[aria-modal="true"]');
+    if (!modal || x == null) return null;
+    for (const img of modal.querySelectorAll("img")) {
+      if (!IMG_RE.test(img.src)) continue;
+      const r = img.getBoundingClientRect();
+      if (r.width >= 48 && r.height >= 48 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+        return { box: img, src: img.src };
+      }
     }
     return null;
   }
@@ -142,7 +146,7 @@
   let resetTimer = 0;
   const pending = new Set();
 
-  const LABEL = "⤓ 원본";
+  const LABEL = "⤓ 다운";
   const css = (el, s) => (el.style.cssText = s);
 
   function ensure() {
@@ -200,7 +204,7 @@
     e.preventDefault();
     e.stopPropagation();
     if (!e.isTrusted || !cur) return;
-    const found = cur.kind === "image" ? imageOf(cur.box) : videoOf(cur.box);
+    const found = cur.kind === "image" ? { src: cur.src } : videoOf(cur.box);
     if (!found || !found.src) {
       // variants not seen yet (e.g. post loaded before this script)
       setText("영상 주소 없음, 새로고침 후 다시", 2500);
@@ -231,22 +235,36 @@
     }
   });
 
+  function onPointer(e) {
+    const t = e.target;
+    if (!(t instanceof Element) || t === host) return;
+    const v = videoOf(t);
+    const i = v ? null : imageOf(t, e.clientX, e.clientY);
+    const hit = v ? { box: v.box, kind: "video" } : i ? { box: i.box, src: i.src, kind: "image" } : null;
+    if (!hit) return scheduleHide();
+    clearTimeout(hideTimer);
+    ensure();
+    if (!cur || cur.box !== hit.box) {
+      cur = hit;
+      if (!pending.size) setText(LABEL);
+    }
+    place();
+  }
+  document.addEventListener("mouseover", onPointer, true);
+  // Photo viewer: one overlay covers the whole image area, so moving onto
+  // the photo fires no mouseover. Re-check on mousemove, once per frame.
+  let moveQueued = null;
   document.addEventListener(
-    "mouseover",
+    "mousemove",
     (e) => {
-      const t = e.target;
-      if (!(t instanceof Element) || t === host) return;
-      const v = videoOf(t);
-      const i = v ? null : imageOf(t);
-      const hit = v ? { box: v.box, kind: "video" } : i ? { box: i.box, kind: "image" } : null;
-      if (!hit) return scheduleHide();
-      clearTimeout(hideTimer);
-      ensure();
-      if (!cur || cur.box !== hit.box) {
-        cur = hit;
-        if (!pending.size) setText(LABEL);
-      }
-      place();
+      if (!e.target.closest || !e.target.closest('[aria-modal="true"]')) return;
+      if (moveQueued) return void (moveQueued = e);
+      moveQueued = e;
+      requestAnimationFrame(() => {
+        const ev = moveQueued;
+        moveQueued = null;
+        onPointer(ev);
+      });
     },
     true
   );
