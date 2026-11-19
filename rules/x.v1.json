@@ -12,7 +12,10 @@
     "socialContext": "[data-testid=\"socialContext\"]",
     "quoteBox": "div[role=\"link\"]",
     "photo": "[data-testid=\"tweetPhoto\"]",
-    "video": "[data-testid=\"videoPlayer\"], [data-testid=\"videoComponent\"]"
+    "video": "[data-testid=\"videoPlayer\"], [data-testid=\"videoComponent\"]",
+    "notifLink": "a[data-testid=\"AppTabBar_Notifications_Link\"], a[href=\"/notifications\"][role=\"link\"]",
+    "dmLink": "a[data-testid=\"AppTabBar_DirectMessage_Link\"], a[href=\"/messages\"][role=\"link\"], a[href^=\"/i/chat\"][role=\"link\"]",
+    "badge": "div, span"
   },
   "text": {
     "avatarPath": "/profile_images/",

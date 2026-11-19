@@ -1,17 +1,30 @@
 // Injected into every x.com panel (main frame only) before x.com's own
-// scripts. Three jobs, nothing else:
+// scripts. Six jobs, nothing else:
 // 1. tell the app when this panel gets keyboard focus (active-panel marker)
-// 2. catch the app's own shortcuts before x.com sees them
+// 2. catch the app's own shortcuts before x.com sees them (and Ctrl/Cmd +
+//    wheel for zoom)
 // 3. Ctrl/Cmd+V outside a text field: ask Rust for the X link on the
 //    clipboard (Rust reads the clipboard, not the page), ask the user, then
 //    open it in this panel
-// The panel capability only allows `panel_focused`, `shortcut`,
-// `panel_keys` (read the configured bindings), `paste_link`, `open_link` and, for capture.js,
+// 4. "다른 패널에서 열기": send the post under the pointer (or the one X's
+//    j/k selected, or this page) to another panel, asking which one when
+//    there are several
+// 5. window hidden to the tray: pause every video/audio, and keep new ones
+//    from starting until it is back (sound must not leak while hidden)
+// 6. read the unread counts X already shows (badges on the 알림 / 쪽지
+//    links, or "(3)" in the title) and tell the app when they change.
+//    Nothing is requested from X for this.
+// The panel capability only allows `panel_focused`, `panel_unread`, `shortcut`,
+// `panel_keys` (read the configured bindings), `paste_link`, `open_link`,
+// `send_link` and, for capture.js,
 // `capture_begin` / `capture_shot` / `capture_drop` / `capture_finish`.
 // Keep the key mapping in sync with ui/app.js.
 (() => {
   if (window.top !== window) return;
   const mac = /Mac/.test(navigator.platform || navigator.userAgent);
+  // X screen selectors (rules.js, rules/x.v1.json).
+  const R = window[Symbol.for("paneful.rules")];
+  const S = (k) => R.sel(k);
   const call = (cmd, args) => {
     const t = window.__TAURI_INTERNALS__;
     return t ? t.invoke(cmd, args || {}) : Promise.reject();
@@ -42,6 +55,28 @@
     return null;
   };
 
+  const capturing = () => !!window[Symbol.for("paneful.capturing")];
+  // Ctrl/Cmd + wheel (and a trackpad pinch, which arrives as Ctrl + wheel):
+  // the same zoom steps as the keys. One step per notch, at most one per
+  // 80 ms, so a fast trackpad doesn't run through every level at once.
+  let wheelSum = 0;
+  let wheelAt = 0;
+  window.addEventListener(
+    "wheel",
+    (e) => {
+      if (!(e.ctrlKey || (mac && e.metaKey))) return;
+      e.preventDefault();
+      if (capturing()) return;
+      wheelSum += e.deltaMode === 0 ? e.deltaY : e.deltaY * 40;
+      const now = Date.now();
+      if (Math.abs(wheelSum) < 40 || now - wheelAt < 80) return;
+      call("shortcut", { action: wheelSum < 0 ? "zoom_in" : "zoom_out" }).catch(() => {});
+      wheelSum = 0;
+      wheelAt = now;
+    },
+    { capture: true, passive: false },
+  );
+
   window.addEventListener(
     "keydown",
     (e) => {
@@ -49,8 +84,13 @@
       if (!a) return;
       e.preventDefault();
       e.stopImmediatePropagation();
+      // Zoom while picking posts for a capture would change the crop sizes.
+      if (a.action.startsWith("zoom_") && capturing()) return;
       // Holding a toggle key would flip it on and off; only the first press counts.
-      if (!e.repeat || !["bar", "help", "settings", "capture"].includes(a.action)) call("shortcut", a).catch(() => {});
+      if (e.repeat && ["bar", "help", "settings", "capture", "zoom", "send"].includes(a.action)) return;
+      // This page knows which post is meant; Rust only opens it.
+      if (a.action === "send") send();
+      else call("shortcut", a).catch(() => {});
     },
     true,
   );
@@ -105,9 +145,12 @@
     go.onclick = () => answer(true);
     no.onclick = () => answer(false);
     row.append(no, go);
-    box.append(text, addr, row);
+    // "다른 패널에서 열기" with several panels: one button per panel.
+    const pick = document.createElement("div");
+    pick.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;";
+    box.append(text, addr, row, pick);
     host.attachShadow({ mode: "closed" }).append(box);
-    ui = { host, text, addr, row };
+    ui = { host, text, addr, row, pick, btn };
     return ui;
   };
   // Messages sit at the bottom; the question sits in the middle of the
@@ -122,20 +165,29 @@
   };
   const hide = () => {
     pending = null;
+    choosing = null;
     clearTimeout(msgTimer);
     if (ui) ui.host.remove();
   };
-  const say = (msg) => {
+  const say = (msg, ms) => {
     ensureUi();
     pending = null;
     ui.text.textContent = msg;
     ui.addr.style.display = "none";
     ui.row.style.display = "none";
+    ui.pick.style.display = "none";
+    choosing = null;
     place(false);
     show();
     clearTimeout(msgTimer);
-    msgTimer = setTimeout(hide, 3000);
+    msgTimer = setTimeout(hide, ms || 3000);
   };
+  // The app changed this panel's zoom: show the new value for a moment
+  // (not over an open "go there?" question).
+  window.addEventListener("paneful-zoom", (e) => {
+    const p = Number(e.detail);
+    if (!pending && p > 0) say(`배율 ${p}%`, 1200);
+  });
   const ask = (url) => {
     ensureUi();
     pending = url;
@@ -145,9 +197,96 @@
     ui.addr.title = url;
     ui.addr.style.display = "block";
     ui.row.style.display = "flex";
+    ui.pick.style.display = "none";
+    choosing = null;
     place(true);
     show();
   };
+  // ---- open in another panel
+  // The post meant: the one under the pointer, else the one X's j/k
+  // selected (it has focus), else this page. Post = <article>, its address
+  // = the link around its time stamp (same rule as media.js).
+  let hovered = null;
+  document.addEventListener(
+    "mouseover",
+    (e) => {
+      const t = e.target;
+      if (t instanceof Element && !(ui && t === ui.host)) hovered = t.closest(S("post"));
+    },
+    true,
+  );
+  // Pointer left the panel (no element it went to).
+  document.addEventListener("mouseout", (e) => {
+    if (!e.relatedTarget) hovered = null;
+  });
+  const postUrl = (art) => {
+    if (!art || !art.isConnected) return null;
+    const t = [...art.querySelectorAll(S("statusLink"))].map((l) => l.querySelector("time")).find(Boolean);
+    const a = t && t.closest("a");
+    return a && a.href ? a.href : null;
+  };
+  const target = () => {
+    const sel = document.activeElement && document.activeElement.closest ? document.activeElement.closest(S("post")) : null;
+    return postUrl(hovered) || postUrl(sel) || location.href;
+  };
+  let choosing = null; // { url, targets } while asking which panel
+  const sendTo = (url, to) =>
+    call("send_link", { url, to: to || null }).then((r) => {
+      if (r && r.to) say(`${r.to}에서 엶`);
+      else if (r && r.targets && r.targets.length) choose(url, r.targets);
+      else if (r && r.msg) say(r.msg);
+    }, (e) => say(String(e || "열지 못함")));
+  const send = () => {
+    if (window[Symbol.for("paneful.capturing")]) return;
+    sendTo(target());
+  };
+  window.addEventListener("paneful-send", send);
+  const choose = (url, targets) => {
+    ensureUi();
+    pending = null;
+    clearTimeout(msgTimer);
+    ui.text.textContent = "어느 패널에서 열까? (숫자 키로 골라도 됨)";
+    ui.addr.textContent = url.replace(/^https:\/\//, "");
+    ui.addr.title = url;
+    ui.addr.style.display = "block";
+    ui.row.style.display = "none";
+    ui.pick.replaceChildren();
+    for (const t of targets) {
+      const b = ui.btn(`${t.index + 1} · ${t.label}`, false);
+      b.style.borderColor = t.color;
+      b.onclick = () => {
+        hide();
+        sendTo(url, t.id);
+      };
+      ui.pick.append(b);
+    }
+    const no = ui.btn("취소 (Esc)", false);
+    no.onclick = hide;
+    ui.pick.append(no);
+    ui.pick.style.display = "flex";
+    choosing = { url, targets };
+    place(true);
+    show();
+  };
+  // While choosing: 1-9 (the panel's place, like Ctrl+1..9) or Esc.
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (!choosing || e.ctrlKey || e.metaKey || e.altKey) return;
+      const m = /^(?:Digit|Numpad)([1-9])$/.exec(e.code);
+      if (!m && e.code !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (e.repeat) return;
+      const c = choosing;
+      if (!m) return hide();
+      const t = c.targets.find((x) => x.index === Number(m[1]) - 1);
+      if (!t) return;
+      hide();
+      sendTo(c.url, t.id);
+    },
+    true,
+  );
   function answer(yes) {
     const url = pending;
     hide();
@@ -171,7 +310,7 @@
   window.addEventListener(
     "pointerdown",
     (e) => {
-      if (pending && ui && !e.composedPath().includes(ui.host)) hide();
+      if ((pending || choosing) && ui && !e.composedPath().includes(ui.host)) hide();
     },
     true,
   );
@@ -187,6 +326,87 @@
         if (r && r.url) ask(r.url);
         else if (r && r.msg) say(r.msg);
       }, () => {});
+    },
+    true,
+  );
+
+  // ---- unread counts
+  // Badge = a leaf element on the nav link whose text is just a number
+  // ("3", "20+"). The nav link is the left sidebar on wide panels and the
+  // bottom bar on narrow ones. No link (e.g. a page without the nav): the
+  // "(3)" X puts in front of the title, for 알림 only.
+  const BADGE = /^\d{1,4}\+?$/;
+  const badgeIn = (a) => {
+    if (!a) return "";
+    for (const el of a.querySelectorAll(S("badge"))) {
+      if (el.childElementCount) continue;
+      const t = (el.textContent || "").trim();
+      if (BADGE.test(t)) return t;
+    }
+    return "";
+  };
+  const readUnread = () => {
+    const nl = document.querySelector(S("notifLink"));
+    const ml = document.querySelector(S("dmLink"));
+    let n = badgeIn(nl);
+    if (!nl) {
+      const m = /^\((\d{1,4}\+?)\)\s/.exec(document.title || "");
+      n = m ? m[1] : "";
+    }
+    return { n, dm: badgeIn(ml) };
+  };
+  let sent = "";
+  const checkUnread = () => {
+    const u = readUnread();
+    const key = u.n + "|" + u.dm;
+    if (key === sent) return;
+    sent = key;
+    call("panel_unread", u).catch(() => (sent = "")); // retried on the next tick
+  };
+  // Cheap (two selectors) and only sends on change.
+  // Driven by DOM changes, not only a timer: in a hidden page (window in
+  // the tray, panels hidden) Chromium slows repeating timers down to once a
+  // minute after a few minutes, while X still gets its updates over the
+  // network and still renders the badge, and MutationObserver callbacks
+  // still run. One check per burst of changes; a one-shot timeout started
+  // from the observer isn't a chained timer, so it isn't held back that far.
+  let queued = false;
+  const soon = () => {
+    if (queued) return;
+    queued = true;
+    setTimeout(() => {
+      queued = false;
+      checkUnread();
+    }, 500);
+  };
+  const watch = () => {
+    new MutationObserver(soon).observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+  };
+  if (document.documentElement) watch();
+  else document.addEventListener("DOMContentLoaded", watch);
+  setInterval(checkUnread, 5000); // fallback, e.g. a badge the observer missed
+  document.addEventListener("DOMContentLoaded", checkUnread);
+  // ---- window hidden to the tray: no sound
+  // Rust sends this before the window hides and after it is back. Paused
+  // media stay paused when it is back (X's play button resumes them).
+  let quiet = false;
+  const hush = () => {
+    for (const m of document.querySelectorAll("video, audio")) if (!m.paused) m.pause();
+  };
+  window.addEventListener("paneful-hidden", (e) => {
+    quiet = e.detail === true;
+    if (quiet) hush();
+  });
+  // X starts videos on its own (autoplay on scroll, next video): stop
+  // them while hidden. "play" doesn't bubble, so listen while capturing.
+  document.addEventListener(
+    "play",
+    (e) => {
+      if (quiet && e.target instanceof HTMLMediaElement) e.target.pause();
     },
     true,
   );

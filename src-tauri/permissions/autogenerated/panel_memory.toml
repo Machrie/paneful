@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-panel-memory"
+description = "Enables the panel_memory command without any pre-configured scope."
+commands.allow = ["panel_memory"]
+
+[[permission]]
+identifier = "deny-panel-memory"
+description = "Denies the panel_memory command without any pre-configured scope."
+commands.deny = ["panel_memory"]

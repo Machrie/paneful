@@ -11,6 +11,17 @@ pub struct Account {
     pub id: Uuid,
     pub label: String,
     pub color: String,
+    /// Page zoom of this panel (1.0 = 100%). Missing in older files = 1.0.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub zoom: f64,
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+fn is_one(z: &f64) -> bool {
+    (*z - 1.0).abs() < 1e-9
 }
 
 impl Account {
@@ -19,6 +30,7 @@ impl Account {
             id: Uuid::new_v4(),
             label: label.into(),
             color: color.into(),
+            zoom: 1.0,
         }
     }
 
@@ -144,6 +156,9 @@ impl Settings {
         };
         s.migrate();
         s.fix_ratios();
+        for a in &mut s.accounts {
+            a.zoom = crate::zoom::clamp(a.zoom);
+        }
         (s, persist)
     }
 
@@ -228,9 +243,46 @@ impl Settings {
     }
 }
 
+/// Move panel `from` to place `to` (clamped), with its width share.
+/// false: nothing moved.
+pub fn move_panel(s: &mut Settings, from: usize, to: usize) -> bool {
+    let n = s.accounts.len();
+    if from >= n || n < 2 {
+        return false;
+    }
+    let to = to.min(n - 1);
+    if to == from {
+        return false;
+    }
+    let acc = s.accounts.remove(from);
+    s.accounts.insert(to, acc);
+    if s.ratios.len() == n {
+        let r = s.ratios.remove(from);
+        s.ratios.insert(to, r);
+    } else {
+        s.fix_ratios();
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn move_keeps_widths() {
+        let mut s = Settings::default();
+        s.accounts.push(Account::new("계정 3", COLORS[2]));
+        s.ratios = vec![0.5, 0.3, 0.2];
+        let ids: Vec<Uuid> = s.accounts.iter().map(|a| a.id).collect();
+        assert!(move_panel(&mut s, 0, 2));
+        assert_eq!(s.accounts.iter().map(|a| a.id).collect::<Vec<_>>(), vec![ids[1], ids[2], ids[0]]);
+        assert_eq!(s.ratios, vec![0.3, 0.2, 0.5]);
+        assert!(!move_panel(&mut s, 2, 99));
+        assert!(move_panel(&mut s, 1, 0));
+        assert_eq!(s.accounts[0].id, ids[2]);
+        assert!(!move_panel(&mut s, 5, 0));
+    }
 
     #[test]
     fn ratios_normalised() {
@@ -305,6 +357,20 @@ mod tests {
         assert!(l.keys.is_empty() && l.save_dir.is_none());
         assert!(l.update_check && l.skip_version.is_none());
         assert!(l.rules_update);
+    }
+
+    #[test]
+    fn zoom_default_and_kept() {
+        // Old account entries have no zoom.
+        let a: Account = serde_json::from_value(serde_json::json!({
+            "id": Uuid::new_v4(), "label": "a", "color": "#000"
+        }))
+        .unwrap();
+        assert_eq!(a.zoom, 1.0);
+        // 100% isn't written, anything else is.
+        assert!(serde_json::to_value(&a).unwrap().get("zoom").is_none());
+        let b = Account { zoom: 0.8, ..a };
+        assert_eq!(serde_json::to_value(&b).unwrap()["zoom"], 0.8);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! X screen rules: the CSS selectors (and a few URL fragments) that the
-//! panel scripts use to find posts, names, avatars, photos and videos on
-//! x.com. They live in `rules/x.v1.json` in the repository, not in the
+//! panel scripts use to find posts, names, avatars, photos, videos and the
+//! unread badges on x.com. They live in `rules/x.v1.json` in the repository, not in the
 //! scripts, so when X changes its page the fix is one edit there and
 //! installed apps pick it up without a release.
 //!
@@ -53,6 +53,9 @@ pub const SELECTORS: &[&str] = &[
     "quoteBox",
     "photo",
     "video",
+    "notifLink",
+    "dmLink",
+    "badge",
 ];
 /// Plain substrings matched against image URLs (String.includes).
 pub const TEXTS: &[&str] = &["avatarPath", "emojiPath"];
@@ -151,6 +154,10 @@ pub fn builtin() -> Rules {
 }
 
 fn cache_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    // Portable mode: next to settings.json in the data folder.
+    if let Some(root) = crate::portable::root() {
+        return Some(root.join(CACHE_FILE));
+    }
     app.path().app_data_dir().ok().map(|d| d.join(CACHE_FILE))
 }
 

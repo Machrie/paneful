@@ -1,5 +1,5 @@
-// Injected into every x.com panel (main frame only), before media.js and
-// capture.js. Holds the X screen rules (rules.rs, rules/x.v1.json): the
+// Injected into every x.com panel (main frame only), first: before
+// panel.js, media.js and capture.js. Holds the X screen rules (rules.rs, rules/x.v1.json): the
 // CSS selectors and URL fragments those scripts use to find posts, names,
 // avatars, photos and videos. The rules are data only: they are passed to
 // querySelector / closest / matches and String.includes, nothing else.

@@ -9,12 +9,17 @@ mod keys;
 mod capture;
 mod snap;
 mod layout;
+mod health;
 mod media;
+mod memory;
 mod nav;
 mod rules;
+mod portable;
 mod settings;
 mod tray;
+mod unread;
 mod update;
+mod zoom;
 
 use serde::Serialize;
 use settings::{Account, Persist, Settings, COLORS};
@@ -52,6 +57,12 @@ pub(crate) struct AppState {
     settings_open: Mutex<bool>,
     /// Capture preview open: panels are hidden the same way.
     capture: Mutex<bool>,
+    /// Active panel fills the window, the others are hidden. Not persisted.
+    zoom: Mutex<bool>,
+    /// Window hidden to the tray: panels are hidden too, so WebView2 /
+    /// WKWebView treat the pages as not visible (no painting, throttled
+    /// timers). Pages keep running.
+    hidden: Mutex<bool>,
     /// Global show/hide shortcut as registered (None: off or failed).
     hotkey: Mutex<Option<String>>,
     /// Why the shortcut isn't registered (start or last change attempt).
@@ -61,6 +72,9 @@ pub(crate) struct AppState {
     /// X screen rules in effect, and the last download check (rules.rs).
     rules: Mutex<rules::Rules>,
     rules_status: Mutex<rules::Status>,
+    /// Unread counts per account as its panel shows them (unread.rs).
+    /// Only accounts with something unread are in here. Not persisted.
+    unread: Mutex<BTreeMap<Uuid, unread::Unread>>,
     path: PathBuf,
     persist: Persist,
 }
@@ -88,6 +102,12 @@ struct PanelView {
     color: String,
     active: bool,
     rect: layout::Rect,
+    /// Page zoom (1.0 = 100%).
+    zoom: f64,
+    /// Unread counts X shows in this panel.
+    unread: unread::Unread,
+    /// On screen (false: hidden while another panel is zoomed).
+    shown: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -100,6 +120,8 @@ struct LayoutPayload {
     help: bool,
     /// Capture preview open.
     capture: bool,
+    /// One panel fills the window (see AppState::zoom).
+    zoom: bool,
     top: f64,
     gap: f64,
     min_panel: f64,
@@ -117,6 +139,10 @@ struct LayoutPayload {
     /// Save folder in effect, and whether it is the default one.
     save_dir: String,
     save_dir_default: bool,
+    /// Portable data folder next to the exe (None: AppData).
+    data_dir: Option<String>,
+    /// Portable marker found but its folder isn't writable.
+    data_warning: Option<String>,
     /// This build's version, for settings.
     version: String,
     /// New version check turned on in settings.
@@ -169,14 +195,36 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
     let hotkey = state.hotkey.lock().unwrap().clone();
     let hotkey_error = state.hotkey_error.lock().unwrap().clone();
     let capture = *state.capture.lock().unwrap();
+    let zoom = {
+        // Nothing to zoom with one panel; don't let it come back on later.
+        let mut z = state.zoom.lock().unwrap();
+        if s.accounts.len() < 2 {
+            *z = false;
+        }
+        *z
+    };
+    let hidden = *state.hidden.lock().unwrap();
     let up = state.update.lock().unwrap().clone();
     let rules_st = {
         let st = state.rules_status.lock().unwrap().clone();
         rules::status_of(&state.rules.lock().unwrap(), &st)
     };
+    let unread = state.unread.lock().unwrap().clone();
     let (w, h) = logical_size(&window);
     let top = top_of(&s);
-    let rects = layout::panels(w, h, top, &s.ratios);
+    let mut rects = layout::panels(w, h, top, &s.ratios);
+    // Zoomed: the active panel (first one if none) takes the whole area.
+    let zoomed = if zoom && s.accounts.len() > 1 {
+        let ids: Vec<Uuid> = s.accounts.iter().map(|a| a.id).collect();
+        active.filter(|a| ids.contains(a)).or(ids.first().copied())
+    } else {
+        None
+    };
+    if let Some(z) = zoomed {
+        if let Some(i) = s.accounts.iter().position(|a| a.id == z) {
+            rects[i] = layout::Rect { x: 0.0, y: top, w, h: (h - top).max(0.0) };
+        }
+    }
 
     if let Some(host) = app.get_webview(HOST) {
         let _ = host.set_bounds(tauri::Rect {
@@ -191,9 +239,12 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
                 position: LogicalPosition::new(r.x, r.y).into(),
                 size: LogicalSize::new(r.w, r.h).into(),
             });
+        }
+        let shown = zoomed.is_none_or(|z| z == acc.id);
+        if let Some(wv) = app.get_webview(&panel_label(acc)) {
             // Native webviews sit above the host UI; the overlays can only
             // show while they are hidden.
-            let _ = if help || settings_open || capture { wv.hide() } else { wv.show() };
+            let _ = if help || settings_open || capture || hidden || !shown { wv.hide() } else { wv.show() };
         }
         panels.push(PanelView {
             id: acc.id.to_string(),
@@ -201,6 +252,9 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
             color: acc.color.clone(),
             active: active == Some(acc.id),
             rect: *r,
+            zoom: acc.zoom,
+            unread: unread.get(&acc.id).cloned().unwrap_or_default(),
+            shown,
         });
     }
     let payload = LayoutPayload {
@@ -209,6 +263,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
         bar: bar_visible(&s),
         help,
         capture,
+        zoom: zoomed.is_some(),
         top,
         gap: layout::GAP,
         min_panel: layout::MIN_PANEL,
@@ -221,6 +276,8 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
         keys: keys::views(&s.keys),
         save_dir: media::save_dir(app).map(|d| d.display().to_string()).unwrap_or_default(),
         save_dir_default: s.save_dir.is_none(),
+        data_dir: portable::root().map(|d| d.display().to_string()),
+        data_warning: fallback_warning(),
         version: update::current(app),
         update_check: s.update_check,
         update_notice: update::notice(&s, &up),
@@ -252,11 +309,20 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
 
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(START_URL.parse().unwrap()))
         .data_store_identifier(acc.store_id())
-        .initialization_script(PANEL_JS.replace("/*KEYS*/null", keys_json))
         .initialization_script(rules_js)
+        .initialization_script(PANEL_JS.replace("/*KEYS*/null", keys_json))
         .initialization_script(media::SCRIPT)
         .initialization_script(capture::SCRIPT)
         .initialization_script(LINKS_JS)
+        // Zoom again after each page load: WebView2 may drop the zoom factor
+        // when a page loads (Chromium keeps zoom per site). Same value again
+        // is a no-op.
+        .on_page_load(|wv, _| {
+            let z = panel_zoom(&wv.app_handle().state::<AppState>(), wv.label());
+            if let Some(z) = z.filter(|z| *z != 1.0) {
+                let _ = wv.set_zoom(z);
+            }
+        })
         .on_navigation(move |url| match nav::decide(url) {
             nav::Decision::Allow => true,
             nav::Decision::OpenExternal => {
@@ -307,16 +373,100 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
         });
 
     let wv = window.add_child(
-        builder,
+        with_udf(builder),
         LogicalPosition::new(rect.x, rect.y),
         LogicalSize::new(rect.w, rect.h),
     )?;
 
+    if acc.zoom != 1.0 {
+        let _ = wv.set_zoom(acc.zoom);
+    }
     #[cfg(windows)]
     log_webview2_profile(&wv);
-    #[cfg(not(windows))]
-    let _ = wv;
+    health::watch(&wv);
     Ok(())
+}
+
+/// Portable mode: every webview (host and panels) uses the WebView2 user
+/// data folder next to the exe. Same folder for all, so they keep sharing
+/// one WebView2 environment (the runtime keys its web contexts by it).
+/// Installed: Tauri's default, app_local_data_dir.
+fn with_udf<R: Runtime>(b: WebviewBuilder<R>) -> WebviewBuilder<R> {
+    match portable::root() {
+        Some(dir) => b.data_directory(dir.to_path_buf()),
+        None => b,
+    }
+}
+
+/// Text for the dialog and settings when the portable folder can't be used.
+fn fallback_warning() -> Option<String> {
+    match portable::mode() {
+        portable::Mode::Fallback { dir, error } => Some(format!(
+            "{} 폴더에 쓸 수 없어서 포터블 대신 AppData에 저장 중 ({error}). 쓰기 가능한 곳(바탕화면, USB 등)으로 폴더째 옮겨서 실행해라.",
+            dir.display()
+        )),
+        _ => None,
+    }
+}
+
+/// Close a panel's webview and build it again in place (Windows: its
+/// WebView2 browser process is gone, so reload can't help).
+pub(crate) async fn recreate_panel<R: Runtime>(app: &AppHandle<R>, label: &str) -> Result<(), String> {
+    let window = app.get_window(MAIN).ok_or("no window")?;
+    let (acc, keys_json) = {
+        let s = app.state::<AppState>().settings.lock().unwrap().clone();
+        let acc = s.accounts.iter().find(|a| panel_label(a) == label).cloned().ok_or("no such panel")?;
+        (acc, bindings_json(&s))
+    };
+    if let Some(wv) = app.get_webview(label) {
+        let _ = wv.close();
+    }
+    // close() drops the label at once; wait a little in case it didn't.
+    for _ in 0..30 {
+        if app.get_webview(label).is_none() {
+            break;
+        }
+        let _ = tauri::async_runtime::spawn_blocking(|| std::thread::sleep(std::time::Duration::from_millis(100))).await;
+    }
+    if app.get_webview(label).is_some() {
+        return Err("old panel did not close".into());
+    }
+    log::info!("[{label}] rebuilding panel");
+    let rect = layout::Rect { x: 0.0, y: layout::TOP_STRIP, w: 10.0, h: 10.0 };
+    add_panel(&window, &acc, rect, &keys_json).map_err(|e| e.to_string())?;
+    relayout(app);
+    Ok(())
+}
+
+/// Zoom of the panel with this webview label (None: no such panel).
+/// Lock held only for the lookup.
+pub(crate) fn panel_zoom(state: &AppState, label: &str) -> Option<f64> {
+    let s = state.settings.lock().unwrap();
+    s.accounts.iter().find(|a| panel_label(a) == label).map(|a| a.zoom)
+}
+
+/// Account of the panel with this webview label.
+fn panel_id(state: &AppState, label: &str) -> Option<Uuid> {
+    let s = state.settings.lock().unwrap();
+    s.accounts.iter().find(|a| panel_label(a) == label).map(|a| a.id)
+}
+
+/// (account label, counts) of every panel with something unread, in panel
+/// order, for the tray. Locks are let go before returning.
+pub(crate) fn unread_lines(state: &AppState) -> Vec<(String, unread::Unread)> {
+    let accounts: Vec<(Uuid, String)> = state
+        .settings
+        .lock()
+        .unwrap()
+        .accounts
+        .iter()
+        .map(|a| (a.id, a.label.clone()))
+        .collect();
+    let unread = state.unread.lock().unwrap().clone();
+    accounts
+        .into_iter()
+        .filter_map(|(id, label)| unread.get(&id).map(|u| (label, u.clone())))
+        .collect()
 }
 
 /// Hand an off-list address to the system browser. paneful.log keeps each
@@ -361,7 +511,13 @@ fn log_webview2_profile<R: Runtime>(wv: &tauri::Webview<R>) {
 /// confirmed by the ProfilePath log above during M0.
 #[cfg(windows)]
 fn purge_pending_profiles(app: &tauri::App, s: &mut Settings) {
-    let Ok(udf) = app.path().app_local_data_dir() else { return };
+    let udf = match portable::root() {
+        Some(dir) => dir.to_path_buf(),
+        None => match app.path().app_local_data_dir() {
+            Ok(d) => d,
+            Err(_) => return,
+        },
+    };
     s.pending_profile_deletes.retain(|name| {
         let dir = udf.join("EBWebView").join(name);
         match std::fs::remove_dir_all(&dir) {
@@ -377,7 +533,7 @@ fn purge_pending_profiles(app: &tauri::App, s: &mut Settings) {
 
 // ---------------------------------------------------------------- commands
 // The host webview may call these (capabilities/host.json); x.com panels only
-// panel_focused, shortcut, panel_keys, paste_link, open_link and capture_begin/shot/drop/finish
+// panel_focused, panel_unread, shortcut, panel_keys, paste_link, open_link, send_link and capture_begin/shot/drop/finish
 // (capabilities/panel.json). Commands are async
 // because add_child from a sync command deadlocks on WebView2.
 
@@ -423,12 +579,14 @@ async fn commit_layout(app: AppHandle, state: State<'_, AppState>, ratios: Vec<f
 pub(crate) fn focus_account<R: Runtime>(app: &AppHandle<R>, id: Uuid) {
     let state = app.state::<AppState>();
     let label = format!("panel-{}", id.simple());
-    if let Some(wv) = app.get_webview(&label) {
-        let _ = wv.set_focus();
-    }
+    // Mark it active (and lay out) first: while zoomed, that is what shows
+    // the panel, and a hidden webview can't take focus.
     let changed = state.active.lock().unwrap().replace(id) != Some(id);
     if changed {
         relayout(app);
+    }
+    if let Some(wv) = app.get_webview(&label) {
+        let _ = wv.set_focus();
     }
 }
 
@@ -440,19 +598,30 @@ fn refocus_active<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// The calling panel's unread counts changed (panel.js reads them off the
+/// page; see unread.rs). The caller is the panel by its webview label.
+#[tauri::command]
+async fn panel_unread(app: AppHandle, state: State<'_, AppState>, webview: Webview, n: String, dm: String) -> Result<(), String> {
+    let id = panel_id(&state, webview.label()).ok_or("not a panel")?;
+    let u = unread::Unread::new(&n, &dm);
+    let changed = {
+        let mut m = state.unread.lock().unwrap();
+        let old = if u.is_empty() { m.remove(&id) } else { m.insert(id, u.clone()) };
+        old.unwrap_or_default() != u
+    };
+    if changed {
+        relayout(&app);
+        tray::refresh(&app);
+    }
+    Ok(())
+}
+
 /// Panel webview got keyboard focus (click, Tab, or focus_account).
 /// Called from PANEL_JS; the caller is identified by its webview label,
 /// not by anything the page sends.
 #[tauri::command]
 async fn panel_focused(app: AppHandle, state: State<'_, AppState>, webview: Webview) -> Result<(), String> {
-    let id = {
-        let s = state.settings.lock().unwrap();
-        s.accounts
-            .iter()
-            .find(|a| panel_label(a) == webview.label())
-            .map(|a| a.id)
-            .ok_or("not a panel")?
-    };
+    let id = panel_id(&state, webview.label()).ok_or("not a panel")?;
     let changed = state.active.lock().unwrap().replace(id) != Some(id);
     if changed {
         relayout(&app);
@@ -471,17 +640,22 @@ async fn panel_focused(app: AppHandle, state: State<'_, AppState>, webview: Webv
 /// - `tray`: hide the window to the tray (top bar button)
 /// - `capture`: Ctrl/Cmd+Shift+S from the host UI or the top bar button:
 ///   start picking posts in the active panel (capture.js)
+/// - `zoom_in` / `zoom_out` / `zoom_reset`: Ctrl/Cmd + = / - / 0, page zoom
+///   of the panel the key was pressed in; from the host UI the panel at
+///   `index` (tab button) or the active one
 #[tauri::command]
 async fn shortcut(
     app: AppHandle,
     state: State<'_, AppState>,
+    webview: Webview,
     action: String,
     index: Option<usize>,
 ) -> Result<(), String> {
     // Paired start/end lines: after a hang, a start without its end in
     // paneful.log names the shortcut that got stuck.
     log::info!("shortcut {action} {index:?}: start");
-    let r = run_shortcut(&app, &state, &action, index);
+    let caller = panel_id(&state, webview.label());
+    let r = run_shortcut(&app, &state, &action, index, caller);
     log::info!("shortcut {action}: end");
     r
 }
@@ -518,7 +692,43 @@ pub(crate) fn open_settings<R: Runtime>(app: &AppHandle<R>) {
     set_overlay(app, &state, false, true);
 }
 
-fn run_shortcut(app: &AppHandle, state: &AppState, action: &str, index: Option<usize>) -> Result<(), String> {
+/// Zoom one panel a step in (`dir` 1), out (-1) or back to 100% (0), save
+/// it, and show the new value in the panel for a moment.
+fn zoom_panel<R: Runtime>(app: &AppHandle<R>, state: &AppState, id: Uuid, dir: i32) {
+    let label = format!("panel-{}", id.simple());
+    let (z, snapshot) = {
+        let mut s = state.settings.lock().unwrap();
+        let Some(acc) = s.accounts.iter_mut().find(|a| a.id == id) else { return };
+        let z = zoom::step(acc.zoom, dir);
+        let changed = acc.zoom != z;
+        acc.zoom = z;
+        (z, changed.then(|| s.clone()))
+    };
+    if let Some(snap) = &snapshot {
+        state.save(snap);
+    }
+    if let Some(wv) = app.get_webview(&label) {
+        if snapshot.is_some() {
+            let _ = wv.set_zoom(z);
+        }
+        // Shown even at the limit, so a key that "does nothing" says why.
+        let _ = wv.eval(format!(
+            "window.dispatchEvent(new CustomEvent('paneful-zoom',{{detail:{}}}))",
+            zoom::percent(z)
+        ));
+    }
+    if snapshot.is_some() {
+        relayout(app);
+    }
+}
+
+fn run_shortcut(
+    app: &AppHandle,
+    state: &AppState,
+    action: &str,
+    index: Option<usize>,
+    caller: Option<Uuid>,
+) -> Result<(), String> {
     let app = app.clone();
     // Capture preview open: the host UI handles its own keys; any app
     // shortcut that still gets here closes it first.
@@ -572,6 +782,33 @@ fn run_shortcut(app: &AppHandle, state: &AppState, action: &str, index: Option<u
     if was_open {
         relayout(&app);
     }
+    if action == "zoom" {
+        let on = {
+            let mut z = state.zoom.lock().unwrap();
+            *z = !*z;
+            *z
+        };
+        log::info!("zoom {on}");
+        relayout(&app);
+        let active = *state.active.lock().unwrap(); // see set_overlay
+        let ids: Vec<Uuid> = state.settings.lock().unwrap().accounts.iter().map(|a| a.id).collect();
+        if let Some(id) = active.filter(|a| ids.contains(a)).or(ids.first().copied()) {
+            focus_account(&app, id);
+        }
+        return Ok(());
+    }
+    if action == "send" {
+        // From the host UI: the active panel works out what to send.
+        let active = *state.active.lock().unwrap();
+        let ids: Vec<Uuid> = state.settings.lock().unwrap().accounts.iter().map(|a| a.id).collect();
+        if let Some(id) = active.filter(|a| ids.contains(a)).or(ids.first().copied()) {
+            focus_account(&app, id);
+            if let Some(wv) = app.get_webview(&format!("panel-{}", id.simple())) {
+                let _ = wv.eval("window.dispatchEvent(new Event('paneful-send'))");
+            }
+        }
+        return Ok(());
+    }
     if action == "bar" {
         let snapshot = {
             let mut s = state.settings.lock().unwrap();
@@ -593,6 +830,28 @@ fn run_shortcut(app: &AppHandle, state: &AppState, action: &str, index: Option<u
         return Ok(());
     }
     let active = *state.active.lock().unwrap();
+    let dir = match action {
+        "zoom_in" => Some(1),
+        "zoom_out" => Some(-1),
+        "zoom_reset" => Some(0),
+        _ => None,
+    };
+    if let Some(dir) = dir {
+        // A panel zooms itself; the host UI names a tab or means the active one.
+        let target = caller
+            .or_else(|| index.and_then(|i| ids.get(i).copied()))
+            .or(active.filter(|a| ids.contains(a)))
+            .or(ids.first().copied());
+        if let Some(id) = target {
+            zoom_panel(&app, state, id, dir);
+            // From the host UI (tab button, key with the bar focused): focus
+            // goes to that panel, as for any other click up there.
+            if caller.is_none() {
+                focus_account(&app, id);
+            }
+        }
+        return Ok(());
+    }
     let cur = active.and_then(|a| ids.iter().position(|i| *i == a));
     let n = ids.len();
     let target = match action {
@@ -658,11 +917,165 @@ async fn open_link(state: State<'_, AppState>, webview: Webview, url: String) ->
     webview.navigate(url).map_err(|e| e.to_string())
 }
 
+/// One panel a link can be sent to.
+#[derive(Serialize)]
+struct Target {
+    id: String,
+    label: String,
+    color: String,
+    /// Place on screen, from 0 (Ctrl/Cmd+1 is 0).
+    index: usize,
+}
+
+/// What panel.js does after send_link.
+#[derive(Serialize, Default)]
+struct Sent {
+    /// Opened in this panel (its name).
+    to: Option<String>,
+    /// More than one other panel: ask which one.
+    targets: Vec<Target>,
+    msg: Option<String>,
+}
+
+/// "다른 패널에서 열기" (panel.js): open `url` in the panel of `to`, or,
+/// with no `to`, in the only other panel. With several others, hand back the
+/// list so the panel can ask. Only x.com pages (nav::x_link), and no lock
+/// is held while touching webviews. The caller is the panel by its label.
+#[tauri::command]
+async fn send_link(app: AppHandle, state: State<'_, AppState>, webview: Webview, url: String, to: Option<String>) -> Result<Sent, String> {
+    let (me, others): (Uuid, Vec<(Uuid, Target)>) = {
+        let s = state.settings.lock().unwrap();
+        let me = s
+            .accounts
+            .iter()
+            .find(|a| panel_label(a) == webview.label())
+            .map(|a| a.id)
+            .ok_or("not a panel")?;
+        let others = s
+            .accounts
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.id != me)
+            .map(|(i, a)| (a.id, Target { id: a.id.to_string(), label: a.label.clone(), color: a.color.clone(), index: i }))
+            .collect();
+        (me, others)
+    };
+    let url = nav::x_link(&url).map_err(|_| "X 링크가 아님".to_string())?;
+    let pick = match &to {
+        Some(t) => others.iter().find(|(_, o)| &o.id == t).ok_or("그 패널이 없음")?,
+        None => match others.len() {
+            0 => return Ok(Sent { msg: Some("다른 패널이 없음 · 상단 바의 ＋ 계정으로 추가".into()), ..Default::default() }),
+            1 => &others[0],
+            _ => return Ok(Sent { targets: others.into_iter().map(|(_, t)| t).collect(), ..Default::default() }),
+        },
+    };
+    let (id, label) = (pick.0, pick.1.label.clone());
+    let wv = app.get_webview(&format!("panel-{}", id.simple())).ok_or("그 패널이 없음")?;
+    log::info!("send_link: {url} from {me} to {id}");
+    wv.navigate(url).map_err(|e| e.to_string())?;
+    focus_account(&app, id);
+    Ok(Sent { to: Some(label), ..Default::default() })
+}
+
+/// Longest panel name, in characters.
+const MAX_LABEL: usize = 30;
+
+/// Settings: new name for a panel.
+#[tauri::command]
+async fn rename_account(app: AppHandle, state: State<'_, AppState>, id: String, label: String) -> Result<(), String> {
+    let label: String = label.trim().chars().filter(|c| !c.is_control()).collect();
+    if label.is_empty() {
+        return Err("이름이 비어 있음".into());
+    }
+    if label.chars().count() > MAX_LABEL {
+        return Err(format!("이름은 {MAX_LABEL}자까지"));
+    }
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        let acc = s.accounts.iter_mut().find(|a| a.id.to_string() == id).ok_or("no such account")?;
+        acc.label = label;
+        s.clone()
+    };
+    state.save(&snapshot);
+    relayout(&app);
+    Ok(())
+}
+
+/// Settings: move a panel to place `to` (0 = leftmost). Its width share
+/// moves with it; Ctrl/Cmd+1..9 follow the new order.
+#[tauri::command]
+async fn move_account(app: AppHandle, state: State<'_, AppState>, id: String, to: usize) -> Result<(), String> {
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        let from = s.accounts.iter().position(|a| a.id.to_string() == id).ok_or("no such account")?;
+        if !settings::move_panel(&mut s, from, to) {
+            return Ok(());
+        }
+        s.clone()
+    };
+    state.save(&snapshot);
+    relayout(&app);
+    Ok(())
+}
+
+/// Window hidden to the tray (`hidden`) or back. Hiding: every playing
+/// video/audio is paused (panel.js) and, on Windows, the panel is muted
+/// as well, so nothing can be heard while hidden; the panels are hidden
+/// too (relayout), which lets the webviews stop painting. Pages keep
+/// running (unread counts still update). Shown again: unmuted, but paused
+/// media stay paused.
+/// Called before the window hides and after it shows, never on the main
+/// thread and with no lock held (tray.rs).
+pub(crate) fn set_window_hidden<R: Runtime>(app: &AppHandle<R>, hidden: bool) {
+    let state = app.state::<AppState>();
+    *state.hidden.lock().unwrap() = hidden;
+    let labels: Vec<String> = state.settings.lock().unwrap().accounts.iter().map(panel_label).collect();
+    for label in &labels {
+        let Some(wv) = app.get_webview(label) else { continue };
+        let _ = wv.eval(format!("window.dispatchEvent(new CustomEvent('paneful-hidden',{{detail:{hidden}}}))"));
+        #[cfg(windows)]
+        set_muted(&wv, hidden);
+    }
+    relayout(app);
+}
+
+/// Windows: WebView2's own mute, which also covers sound from frames the
+/// page script can't reach (embedded players).
+#[cfg(windows)]
+fn set_muted<R: Runtime>(wv: &tauri::Webview<R>, muted: bool) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_8;
+    use windows::core::Interface;
+    let label = wv.label().to_string();
+    let _ = wv.with_webview(move |pw| unsafe {
+        let r = pw
+            .controller()
+            .CoreWebView2()
+            .and_then(|c| c.cast::<ICoreWebView2_8>())
+            .and_then(|c| c.SetIsMuted(muted));
+        if let Err(e) = r {
+            log::warn!("[{label}] mute {muted} failed: {e}");
+        }
+    });
+}
+
+/// 새로고침 (tab button, settings memory list). Also restarts the dead panel
+/// recovery count, and rebuilds the panel if its WebView2 is gone.
 #[tauri::command]
 async fn reload_panel(app: AppHandle, id: String) -> Result<(), String> {
     let label = format!("panel-{}", id.replace('-', ""));
+    let dead = health::is_dead(&label);
+    health::reset(&label);
+    if dead {
+        return recreate_panel(&app, &label).await;
+    }
     let wv = app.get_webview(&label).ok_or("no such panel")?;
     wv.reload().map_err(|e| e.to_string())
+}
+
+/// Settings screen: memory per panel (memory.rs).
+#[tauri::command]
+async fn panel_memory(app: AppHandle) -> memory::Report {
+    memory::measure(&app).await
 }
 
 #[tauri::command]
@@ -686,6 +1099,8 @@ async fn add_account(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
         drop(s);
         state.save(&snapshot);
     }
+    // The new panel should be seen (it starts on the login page).
+    *state.zoom.lock().unwrap() = false;
     relayout(&app);
     Ok(())
 }
@@ -707,6 +1122,7 @@ async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: String) 
             *active = None;
         }
         drop(active);
+        state.unread.lock().unwrap().remove(&acc.id);
         s.ratios = layout::clamp_ratios(w, &layout::with_removed(&s.ratios, idx));
         s.fix_ratios();
         #[cfg(windows)]
@@ -718,10 +1134,12 @@ async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: String) 
         state.save(&snapshot);
         acc
     };
+    health::forget(&panel_label(&acc));
     if let Some(wv) = app.get_webview(&panel_label(&acc)) {
         wv.close().map_err(|e| e.to_string())?;
     }
     relayout(&app);
+    tray::refresh(&app);
 
     // macOS: try to drop the WKWebsiteDataStore now; whatever fails stays in
     // pending_store_deletes and is retried on next start.
@@ -823,7 +1241,7 @@ async fn set_key(app: AppHandle, state: State<'_, AppState>, id: String, accel: 
             s.clone()
         };
         state.save(&snapshot);
-        tray::set_tooltip(&app, effective.as_deref());
+        tray::refresh(&app);
     } else {
         let snapshot = {
             let mut s = state.settings.lock().unwrap();
@@ -895,6 +1313,15 @@ async fn reset_save_dir(app: AppHandle, state: State<'_, AppState>) -> Result<()
 async fn open_save_dir(app: AppHandle) -> Result<(), String> {
     let dir = media::save_dir(&app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("폴더를 만들 수 없음: {e}"))?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// Portable data folder in Explorer.
+#[tauri::command]
+async fn open_data_dir(app: AppHandle) -> Result<(), String> {
+    let dir = portable::root().ok_or("포터블 모드가 아님")?;
     app.opener()
         .open_path(dir.to_string_lossy(), None::<&str>)
         .map_err(|e| e.to_string())
@@ -981,7 +1408,19 @@ async fn open_update(app: AppHandle) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    // Before the builder: the log file goes next to the exe in portable mode.
+    let log_target = match portable::init() {
+        portable::Mode::Portable(dir) => tauri_plugin_log::TargetKind::Folder {
+            path: dir.join("logs"),
+            file_name: Some("paneful".into()),
+        },
+        _ => tauri_plugin_log::TargetKind::LogDir { file_name: Some("paneful".into()) },
+    };
+    let builder = tauri::Builder::default();
+    // Replaces tauri-runtime-wry's own unlimited silent reload (health.rs).
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(health::on_terminated);
+    builder
         .plugin(tauri_plugin_opener::init())
         // Folder picker in settings. Called from Rust only; no JS permission.
         .plugin(tauri_plugin_dialog::init())
@@ -996,14 +1435,30 @@ pub fn run() {
                 .level(log::LevelFilter::Info)
                 .targets([
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
-                        file_name: Some("paneful".into()),
-                    }),
+                    tauri_plugin_log::Target::new(log_target),
                 ])
                 .build(),
         )
         .setup(|app| {
-            let path = app.path().app_config_dir()?.join("settings.json");
+            let path = match portable::mode() {
+                portable::Mode::Portable(dir) => {
+                    // First portable start: bring AppData's data over (copy only).
+                    let old = app.path().app_config_dir()?.join("settings.json");
+                    let old_udf = app.path().app_local_data_dir()?;
+                    match portable::migrate(dir, &old, &old_udf) {
+                        portable::Migration::Skipped => {}
+                        r => log::info!("portable: copied AppData data -> {r:?}"),
+                    }
+                    log::info!("portable: data in {}", dir.display());
+                    dir.join("settings.json")
+                }
+                other => {
+                    if let portable::Mode::Fallback { dir, error } = other {
+                        log::warn!("portable: {} not writable ({error}); using AppData", dir.display());
+                    }
+                    app.path().app_config_dir()?.join("settings.json")
+                }
+            };
             #[allow(unused_mut)]
             let (mut s, persist) = Settings::load(&path);
             #[cfg(windows)]
@@ -1023,9 +1478,12 @@ pub fn run() {
                 hotkey: Mutex::new(hotkey),
                 hotkey_error: Mutex::new(hotkey_error),
                 capture: Mutex::new(false),
+                zoom: Mutex::new(false),
+                hidden: Mutex::new(false),
                 update: Mutex::new(update::Status::default()),
                 rules: Mutex::new(rules::initial(app.handle(), s.rules_update)),
                 rules_status: Mutex::new(rules::Status::default()),
+                unread: Mutex::new(BTreeMap::new()),
                 path,
                 persist,
             };
@@ -1047,6 +1505,11 @@ pub fn run() {
             if let Err(e) = tray::create(app.handle(), hotkey.as_deref()) {
                 log::error!("tray icon failed: {e}");
             }
+            // Non-blocking: the callback runs when it's closed.
+            if let Some(msg) = fallback_warning() {
+                use tauri_plugin_dialog::MessageDialogKind;
+                app.dialog().message(msg).title("Paneful 포터블").kind(MessageDialogKind::Warning).show(|_| {});
+            }
             // New version check, off the main thread (update.rs).
             update::spawn(app.handle());
             // X screen rule fixes, same way (rules.rs).
@@ -1055,7 +1518,7 @@ pub fn run() {
             // Host UI first so the panels stack above it; it stays visible
             // in the top bar and in the gaps between panels.
             window.add_child(
-                WebviewBuilder::new(HOST, WebviewUrl::App("index.html".into())),
+                with_udf(WebviewBuilder::new(HOST, WebviewUrl::App("index.html".into()))),
                 LogicalPosition::new(0.0, 0.0),
                 LogicalSize::new(w, h),
             )?;
@@ -1093,18 +1556,24 @@ pub fn run() {
             set_ratios,
             commit_layout,
             reload_panel,
+            panel_memory,
             add_account,
             remove_account,
             panel_focused,
+            panel_unread,
             shortcut,
             panel_keys,
             paste_link,
             open_link,
+            send_link,
+            rename_account,
+            move_account,
             set_key,
             set_recording,
             pick_save_dir,
             reset_save_dir,
             open_save_dir,
+            open_data_dir,
             capture::capture_begin,
             capture::capture_shot,
             capture::capture_drop,

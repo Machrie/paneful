@@ -52,6 +52,11 @@
         <button id="settings-close" class="icon" data-icon="close" title="닫기 (Esc)"></button>
       </div>
       <section>
+        <h2>패널</h2>
+        <p class="hint">이름은 칸에서 고치고 Enter. 화살표로 순서 바꾸기 (<span class="modkey">Ctrl</span>+1~9는 화면 순서를 따라감).</p>
+        <div id="panel-rows"></div>
+      </section>
+      <section>
         <h2>저장 폴더</h2>
         <p class="hint">이미지·동영상 다운과 게시물 캡쳐 PNG가 저장되는 곳<span id="save-default"> · 지금은 기본 폴더</span></p>
         <div class="dirrow">
@@ -59,6 +64,14 @@
           <button id="save-pick" class="pill">변경</button>
           <button id="save-open" class="pill">열기</button>
           <button id="save-reset" class="pill">기본값</button>
+        </div>
+      </section>
+      <section id="data-section" hidden>
+        <h2>포터블 데이터</h2>
+        <p class="hint" id="data-hint">설정·로그·로그인 데이터가 저장되는 exe 옆 폴더. 다른 PC로 옮기면 로그인은 다시 해야 함</p>
+        <div class="dirrow" id="data-row">
+          <code id="data-dir"></code>
+          <button id="data-open" class="pill">열기</button>
         </div>
       </section>
       <section>
@@ -79,12 +92,18 @@
       </section>
       <section>
         <h2>X 화면 규칙</h2>
-        <p class="hint">다운 버튼·캡쳐·익명화가 X 화면에서 게시물·이름·사진을 찾는 규칙. X가 화면을 바꾸면 저장소의 규칙 파일만 고쳐서 새 버전 없이 따라감. 받는 건 선택자 문자열뿐이고, 받기 실패나 이상한 파일이면 앱에 든 규칙을 씀.</p>
+        <p class="hint">다운 버튼·캡쳐·익명화·알림 숫자가 X 화면에서 게시물·이름·사진·배지를 찾는 규칙. X가 화면을 바꾸면 저장소의 규칙 파일만 고쳐서 새 버전 없이 따라감. 받는 건 선택자 문자열뿐이고, 받기 실패나 이상한 파일이면 앱에 든 규칙을 씀.</p>
         <label class="check"><input type="checkbox" id="rules-auto"> 시작할 때와 6시간마다 고친 규칙 받기 (끄면 앱에 든 규칙만)</label>
         <div class="dirrow uprow">
           <span id="rules-state"></span>
           <button id="rules-check" class="pill">지금 확인</button>
         </div>
+      </section>
+      <section>
+        <h2>패널 메모리</h2>
+        <p class="hint" id="mem-hint">설정을 열어 두는 동안 몇 초마다 다시 잼.</p>
+        <div id="mem-rows"></div>
+        <p id="mem-err" class="hint warn" hidden></p>
       </section>
       <p id="settings-msg" class="foot" role="status"></p>
     </div>
