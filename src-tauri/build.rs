@@ -14,6 +14,7 @@ fn main() {
             "shortcut",
             "panel_keys",
             "paste_link",
+            "open_link",
             "set_key",
             "set_recording",
             "pick_save_dir",

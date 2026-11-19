@@ -80,7 +80,7 @@ x.com 전용 경량 데스크톱 앱. 한 창에 x.com 패널을 나란히 띄�
 |---|---|
 | `Ctrl+1` ~ `Ctrl+9` | N번째 패널로 이동 (고정) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 다음 / 이전 패널 |
-| `Ctrl+V` (입력창 밖에서) | 복사한 X 링크를 활성 패널에서 열기 (고정, 아래 [링크 붙여넣어 열기](#링크-붙여넣어-열기)) |
+| `Ctrl+V` (입력창 밖에서) | 복사한 X 링크를 활성 패널에서 열기, 이동 전에 확인 (고정, 아래 [링크 붙여넣어 열기](#링크-붙여넣어-열기)) |
 | `Ctrl+Shift+H` | 상단 바 보이기 / 숨기기 |
 | `Ctrl+Shift+S` | 게시물 캡쳐 (아래 [게시물 캡쳐](#게시물-캡쳐)) |
 | `Ctrl+/` | 단축키 목록 (`Esc`로 닫기) |
@@ -91,7 +91,7 @@ x.com 자체 단축키(`j`/`k` 이동, `l` 좋아요, `n` 새 게시물 등)는 
 
 ### 링크 붙여넣어 열기
 
-패널에는 주소창이 없다. 대신 X 게시물·프로필 링크를 복사해 두고 패널에서 `Ctrl+V`(맥 `⌘V`)를 누르면 그 패널이 그 주소로 이동한다.
+패널에는 주소창이 없다. 대신 X 게시물·프로필 링크를 복사해 두고 패널에서 `Ctrl+V`(맥 `⌘V`)를 누르면 패널 아래에 이동할 주소와 함께 "복사한 링크로 이동할까?"가 뜬다. `Enter`나 **이동**을 누르면 그 패널이 그 주소로 이동하고, `Esc`·**취소**·패널의 다른 곳 클릭이면 그대로 있는다.
 
 - 게시물 작성창, 검색창, 쪽지 입력처럼 글자 입력 칸에 커서가 있으면 평소처럼 붙여넣기만 된다. 이동하려면 타임라인 같은 빈 곳을 한 번 클릭하고 누른다
 - 받는 링크: `x.com`, `twitter.com`, `mobile.twitter.com`, `m.twitter.com`, `www.` 붙은 것, `fxtwitter.com`·`vxtwitter.com`·`fixupx.com`·`fixvx.com`. 전부 `https://x.com/...`으로 바꿔 연다. `https://` 없이 `x.com/...`만 복사돼도 된다
@@ -205,7 +205,7 @@ npx @tauri-apps/cli@2 build           # 설치 파일 (Windows: NSIS .exe, macOS
 - 단축키 설정(파싱, 겹침 검사, 패널용 바인딩)은 `src-tauri/src/keys.rs`. `settings.json`의 `keys`(앱 단축키), `hotkey`(전역), `save_dir`(저장 폴더)에 들어간다
 - 트레이·전역 단축키는 `src-tauri/src/tray.rs` (`tray-icon` 피처, `tauri-plugin-global-shortcut`)
 - 패널 주입 스크립트
-  - `src-tauri/src/panel.js`: 포커스 보고, 앱 단축키, 입력창 밖 `Ctrl+V` 링크 열기만. `panel` capability로 `panel_focused`, `shortcut`, `panel_keys`(단축키 바인딩 읽기), `paste_link`(클립보드는 Rust가 읽고 링크 검사·정리는 `nav.rs`의 `x_link`)만 허용
+  - `src-tauri/src/panel.js`: 포커스 보고, 앱 단축키, 입력창 밖 `Ctrl+V` 링크 열기만. `panel` capability로 `panel_focused`, `shortcut`, `panel_keys`(단축키 바인딩 읽기), `paste_link`(클립보드는 Rust가 읽고 링크 검사·정리는 `nav.rs`의 `x_link`, 이동은 안 함), `open_link`(사용자가 확인한 주소를 `x_link`로 다시 검사하고 이동)만 허용
   - `src-tauri/src/links.js`: x.com 계열 밖 링크의 왼쪽 클릭을 x.com보다 먼저 받아 실제 주소로 `window.open`. `on_new_window`가 기본 브라우저로 보낸다(우클릭 > 새 창과 같은 경로)
   - `src-tauri/src/media.js` + `media.rs`: 원본 저장 버튼. 패널엔 IPC 없이 `window.open` 트리거를 `on_new_window`가 가로채고, Rust가 twimg 주소를 검증한 뒤 쿠키 없이 받는다
   - `src-tauri/src/capture.js` + `capture.rs` + `snap.rs` + `ui/capture.js`: 게시물 캡쳐. 패널 스크립트가 범위를 스크롤하며 X의 고정 바를 숨기고, 자기 섀도 루트에 가림막(익명N)을 깔아 패널을 찍는다(원본 한 번, 가린 것 한 번). 스크린샷은 `snap.rs`가 OS 기능으로 찍는다(Windows `CapturePreview`, macOS `takeSnapshot`). Rust는 게시물 사각형만 잘라 두었다가 이어 붙이고, 미리보기·저장(`png`)·복사(`tauri-plugin-clipboard-manager`)를 맡는다. 찍기 전후로 위치를 재서 움직였으면 그 장면은 버린다
