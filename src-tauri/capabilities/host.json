@@ -13,6 +13,8 @@
     "allow-reload-panel",
     "allow-add-account",
     "allow-remove-account",
+    "allow-rename-account",
+    "allow-move-account",
     "allow-shortcut",
     "allow-panel-keys",
     "allow-set-key",
