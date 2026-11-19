@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-drop"
+description = "Enables the capture_drop command without any pre-configured scope."
+commands.allow = ["capture_drop"]
+
+[[permission]]
+identifier = "deny-capture-drop"
+description = "Denies the capture_drop command without any pre-configured scope."
+commands.deny = ["capture_drop"]

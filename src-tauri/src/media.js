@@ -174,7 +174,7 @@
   }
 
   function place() {
-    if (!cur) return;
+    if (!cur || shooting) return;
     const r = cur.box.getBoundingClientRect();
     if (r.width < 48 || r.height < 32) return hide();
     host.style.display = "block";
@@ -235,7 +235,15 @@
     }
   });
 
+  // Post capture (capture.js) takes screenshots: no button then.
+  let shooting = false;
+  window.addEventListener("paneful-shooting", (e) => {
+    shooting = !!e.detail;
+    if (shooting) hide();
+  });
+
   function onPointer(e) {
+    if (shooting) return;
     const t = e.target;
     if (!(t instanceof Element) || t === host) return;
     const v = videoOf(t);
