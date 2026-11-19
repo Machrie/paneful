@@ -11,6 +11,7 @@ mod snap;
 mod layout;
 mod media;
 mod nav;
+mod portable;
 mod settings;
 mod tray;
 mod update;
@@ -110,6 +111,10 @@ struct LayoutPayload {
     /// Save folder in effect, and whether it is the default one.
     save_dir: String,
     save_dir_default: bool,
+    /// Portable data folder next to the exe (None: AppData).
+    data_dir: Option<String>,
+    /// Portable marker found but its folder isn't writable.
+    data_warning: Option<String>,
     /// This build's version, for settings.
     version: String,
     /// New version check turned on in settings.
@@ -206,6 +211,8 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
         keys: keys::views(&s.keys),
         save_dir: media::save_dir(app).map(|d| d.display().to_string()).unwrap_or_default(),
         save_dir_default: s.save_dir.is_none(),
+        data_dir: portable::root().map(|d| d.display().to_string()),
+        data_warning: fallback_warning(),
         version: update::current(app),
         update_check: s.update_check,
         update_notice: update::notice(&s, &up),
@@ -282,7 +289,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
         });
 
     let wv = window.add_child(
-        builder,
+        with_udf(builder),
         LogicalPosition::new(rect.x, rect.y),
         LogicalSize::new(rect.w, rect.h),
     )?;
@@ -292,6 +299,28 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
     #[cfg(not(windows))]
     let _ = wv;
     Ok(())
+}
+
+/// Portable mode: every webview (host and panels) uses the WebView2 user
+/// data folder next to the exe. Same folder for all, so they keep sharing
+/// one WebView2 environment (the runtime keys its web contexts by it).
+/// Installed: Tauri's default, app_local_data_dir.
+fn with_udf<R: Runtime>(b: WebviewBuilder<R>) -> WebviewBuilder<R> {
+    match portable::root() {
+        Some(dir) => b.data_directory(dir.to_path_buf()),
+        None => b,
+    }
+}
+
+/// Text for the dialog and settings when the portable folder can't be used.
+fn fallback_warning() -> Option<String> {
+    match portable::mode() {
+        portable::Mode::Fallback { dir, error } => Some(format!(
+            "{} 폴더에 쓸 수 없어서 포터블 대신 AppData에 저장 중 ({error}). 쓰기 가능한 곳(바탕화면, USB 등)으로 폴더째 옮겨서 실행해라.",
+            dir.display()
+        )),
+        _ => None,
+    }
 }
 
 /// Hand an off-list address to the system browser. paneful.log keeps each
@@ -336,7 +365,13 @@ fn log_webview2_profile<R: Runtime>(wv: &tauri::Webview<R>) {
 /// confirmed by the ProfilePath log above during M0.
 #[cfg(windows)]
 fn purge_pending_profiles(app: &tauri::App, s: &mut Settings) {
-    let Ok(udf) = app.path().app_local_data_dir() else { return };
+    let udf = match portable::root() {
+        Some(dir) => dir.to_path_buf(),
+        None => match app.path().app_local_data_dir() {
+            Ok(d) => d,
+            Err(_) => return,
+        },
+    };
     s.pending_profile_deletes.retain(|name| {
         let dir = udf.join("EBWebView").join(name);
         match std::fs::remove_dir_all(&dir) {
@@ -875,6 +910,15 @@ async fn open_save_dir(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Portable data folder in Explorer.
+#[tauri::command]
+async fn open_data_dir(app: AppHandle) -> Result<(), String> {
+    let dir = portable::root().ok_or("포터블 모드가 아님")?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 // ---------------------------------------------------------------- update
 
 /// "지금 확인" in settings. Returns once the check is done; the result
@@ -929,6 +973,14 @@ async fn open_update(app: AppHandle) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before the builder: the log file goes next to the exe in portable mode.
+    let log_target = match portable::init() {
+        portable::Mode::Portable(dir) => tauri_plugin_log::TargetKind::Folder {
+            path: dir.join("logs"),
+            file_name: Some("paneful".into()),
+        },
+        _ => tauri_plugin_log::TargetKind::LogDir { file_name: Some("paneful".into()) },
+    };
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         // Folder picker in settings. Called from Rust only; no JS permission.
@@ -944,14 +996,30 @@ pub fn run() {
                 .level(log::LevelFilter::Info)
                 .targets([
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
-                        file_name: Some("paneful".into()),
-                    }),
+                    tauri_plugin_log::Target::new(log_target),
                 ])
                 .build(),
         )
         .setup(|app| {
-            let path = app.path().app_config_dir()?.join("settings.json");
+            let path = match portable::mode() {
+                portable::Mode::Portable(dir) => {
+                    // First portable start: bring AppData's data over (copy only).
+                    let old = app.path().app_config_dir()?.join("settings.json");
+                    let old_udf = app.path().app_local_data_dir()?;
+                    match portable::migrate(dir, &old, &old_udf) {
+                        portable::Migration::Skipped => {}
+                        r => log::info!("portable: copied AppData data -> {r:?}"),
+                    }
+                    log::info!("portable: data in {}", dir.display());
+                    dir.join("settings.json")
+                }
+                other => {
+                    if let portable::Mode::Fallback { dir, error } = other {
+                        log::warn!("portable: {} not writable ({error}); using AppData", dir.display());
+                    }
+                    app.path().app_config_dir()?.join("settings.json")
+                }
+            };
             #[allow(unused_mut)]
             let (mut s, persist) = Settings::load(&path);
             #[cfg(windows)]
@@ -993,13 +1061,18 @@ pub fn run() {
             if let Err(e) = tray::create(app.handle(), hotkey.as_deref()) {
                 log::error!("tray icon failed: {e}");
             }
+            // Non-blocking: the callback runs when it's closed.
+            if let Some(msg) = fallback_warning() {
+                use tauri_plugin_dialog::MessageDialogKind;
+                app.dialog().message(msg).title("Paneful 포터블").kind(MessageDialogKind::Warning).show(|_| {});
+            }
             // New version check, off the main thread (update.rs).
             update::spawn(app.handle());
 
             // Host UI first so the panels stack above it; it stays visible
             // in the top bar and in the gaps between panels.
             window.add_child(
-                WebviewBuilder::new(HOST, WebviewUrl::App("index.html".into())),
+                with_udf(WebviewBuilder::new(HOST, WebviewUrl::App("index.html".into()))),
                 LogicalPosition::new(0.0, 0.0),
                 LogicalSize::new(w, h),
             )?;
@@ -1049,6 +1122,7 @@ pub fn run() {
             pick_save_dir,
             reset_save_dir,
             open_save_dir,
+            open_data_dir,
             capture::capture_begin,
             capture::capture_shot,
             capture::capture_drop,

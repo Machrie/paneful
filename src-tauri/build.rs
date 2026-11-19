@@ -20,6 +20,7 @@ fn main() {
             "pick_save_dir",
             "reset_save_dir",
             "open_save_dir",
+            "open_data_dir",
             "capture_begin",
             "capture_shot",
             "capture_drop",

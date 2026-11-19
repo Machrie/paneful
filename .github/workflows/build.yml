@@ -52,7 +52,7 @@ jobs:
           name: paneful-${{ matrix.os }}
           path: ${{ matrix.artifact }}
           if-no-files-found: error
-      # Windows portable: the bare exe (UI is embedded, WebView2 loader is
+      # Windows portable: the bare exe plus portable.txt (UI is embedded, WebView2 loader is
       # linked statically) zipped up. Needs the WebView2 runtime on the PC.
       - name: portable zip
         if: matrix.os == 'windows-latest'
@@ -62,6 +62,8 @@ jobs:
           New-Item -ItemType Directory -Force portable | Out-Null
           Copy-Item target/release/paneful.exe portable/Paneful.exe
           Copy-Item LICENSE portable/LICENSE.txt
+          # Marker: data (settings, log, WebView2 profiles) goes to portable\data (portable.rs).
+          Set-Content -Encoding utf8 portable/portable.txt "이 파일이 Paneful.exe 옆에 있으면 설정, 로그, 로그인 데이터를 옆 data 폴더에 저장한다. 지우면 AppData를 쓴다. data 폴더에는 로그인 쿠키가 있으니 남에게 넘기지 마라."
           Compress-Archive -Path portable/* -DestinationPath "Paneful_${ver}_x64-portable.zip"
       - if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v7
