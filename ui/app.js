@@ -117,6 +117,31 @@ $("up-check").onclick = () => invoke("check_update").catch((e) => settingsMsg(e,
 $("up-auto").onchange = (e) =>
   invoke("set_update_check", { on: e.target.checked }).catch((err) => settingsMsg(err, true));
 
+// ---- X screen rules (settings section)
+let rulesShape = "";
+function renderRules() {
+  const r = L.rules || {};
+  const sh = JSON.stringify([r, L.rules_update]);
+  if (sh === rulesShape) return;
+  rulesShape = sh;
+  $("rules-auto").checked = L.rules_update;
+  $("rules-check").disabled = !!r.checking || !L.rules_update;
+  const st = $("rules-state");
+  st.classList.remove("ok", "warn");
+  const from = { builtin: "앱에 든 규칙", cache: "받아둔 규칙", remote: "받은 규칙" }[r.source] || "규칙";
+  if (r.checking) st.textContent = "확인 중…";
+  else if (r.error) {
+    st.textContent = `확인 실패: ${r.error} (${from} r${r.revision} 사용 중)`;
+    st.classList.add("warn");
+  } else {
+    st.textContent = `${from} r${r.revision} 사용 중` + (r.up_to_date ? " · 최신" : "");
+    if (r.up_to_date) st.classList.add("ok");
+  }
+}
+$("rules-check").onclick = () => invoke("check_rules").catch((e) => settingsMsg(e, true));
+$("rules-auto").onchange = (e) =>
+  invoke("set_rules_update", { on: e.target.checked }).catch((err) => settingsMsg(err, true));
+
 function showError(e) {
   statusEl.textContent = String(e);
   statusEl.hidden = false;
@@ -169,6 +194,7 @@ function render() {
     build();
   }
   renderUpdate();
+  renderRules();
   place();
 }
 

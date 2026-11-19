@@ -31,6 +31,9 @@ fn main() {
             "set_update_check",
             "skip_update",
             "open_update",
+            "panel_rules",
+            "check_rules",
+            "set_rules_update",
         ]),
     ))
     .expect("failed to run tauri-build");

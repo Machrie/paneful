@@ -70,6 +70,9 @@ pub struct Settings {
     /// Release the user chose to skip ("0.0.5"): no notice for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip_version: Option<String>,
+    /// Download fixes to the X screen rules (rules.rs) from the repository.
+    #[serde(default = "yes")]
+    pub rules_update: bool,
 }
 
 fn yes() -> bool {
@@ -109,6 +112,7 @@ impl Default for Settings {
             save_dir: None,
             update_check: true,
             skip_version: None,
+            rules_update: true,
         }
     }
 }
@@ -173,6 +177,7 @@ impl Settings {
             save_dir: field(&v, "save_dir"),
             update_check: v.get("update_check").and_then(|x| x.as_bool()).unwrap_or(true),
             skip_version: field(&v, "skip_version"),
+            rules_update: v.get("rules_update").and_then(|x| x.as_bool()).unwrap_or(true),
         })
     }
 
@@ -299,6 +304,7 @@ mod tests {
         assert_eq!(l.hotkey(), Some(DEFAULT_HOTKEY));
         assert!(l.keys.is_empty() && l.save_dir.is_none());
         assert!(l.update_check && l.skip_version.is_none());
+        assert!(l.rules_update);
     }
 
     #[test]
