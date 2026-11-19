@@ -1429,6 +1429,19 @@ async fn open_update(app: AppHandle) -> Result<(), String> {
 
 // ---------------------------------------------------------------- entry
 
+/// Release builds abort on panic (Cargo.toml), so a panic kills the whole
+/// app with nothing on screen. Put the message and place in the log first
+/// so a crash report can say where it happened.
+fn log_panics() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current().name().unwrap_or("?").to_string();
+        log::error!("panic on thread '{thread}': {info}");
+        log::logger().flush();
+        prev(info);
+    }));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Before the builder: the log file goes next to the exe in portable mode.
@@ -1463,6 +1476,7 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            log_panics();
             let path = match portable::mode() {
                 portable::Mode::Portable(dir) => {
                     // First portable start: bring AppData's data over (copy only).
