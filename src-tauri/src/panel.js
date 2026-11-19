@@ -67,7 +67,7 @@
     if (el instanceof HTMLInputElement) return !NOT_TEXT.test(el.type || "");
     return false;
   };
-  // One small box at the bottom of the panel, in a closed shadow root so
+  // One small box in the panel, in a closed shadow root so
   // X's styles and scripts don't reach it. Either a short message or the
   // question "open this address?" (Enter / Esc, or the buttons). No
   // confirm(): wry's macOS UI delegate always answers false.
@@ -79,7 +79,7 @@
     if (ui) return ui;
     const host = document.createElement("div");
     host.style.cssText =
-      "all:initial;position:fixed;inset:auto 0 24px 0;z-index:2147483647;pointer-events:none;display:flex;justify-content:center;";
+      "all:initial;position:fixed;z-index:2147483647;pointer-events:none;display:flex;justify-content:center;";
     const box = document.createElement("div");
     box.style.cssText =
       FONT + "max-width:min(560px,92vw);box-sizing:border-box;color:#fff;background:rgba(32,35,39,.97);" +
@@ -110,6 +110,13 @@
     ui = { host, text, addr, row };
     return ui;
   };
+  // Messages sit at the bottom; the question sits in the middle of the
+  // panel, where the eye already is.
+  const place = (center) => {
+    Object.assign(ui.host.style, center
+      ? { inset: "0", alignItems: "center", padding: "0" }
+      : { inset: "auto 0 24px 0", alignItems: "flex-end", padding: "0" });
+  };
   const show = () => {
     if (!ui.host.isConnected) document.documentElement.appendChild(ui.host);
   };
@@ -124,6 +131,7 @@
     ui.text.textContent = msg;
     ui.addr.style.display = "none";
     ui.row.style.display = "none";
+    place(false);
     show();
     clearTimeout(msgTimer);
     msgTimer = setTimeout(hide, 3000);
@@ -137,6 +145,7 @@
     ui.addr.title = url;
     ui.addr.style.display = "block";
     ui.row.style.display = "flex";
+    place(true);
     show();
   };
   function answer(yes) {
