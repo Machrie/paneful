@@ -813,9 +813,13 @@ window.addEventListener(
   true,
 );
 
-// ---- panel memory (settings screen). Measured only while settings is open.
+// ---- panel memory (settings screen). Measured only after 재기 is pressed,
+// then again every MEM_EVERY while settings stays open. Not on open: the
+// WebView2 process query is the newest native code on this screen, so
+// opening settings must not depend on it.
 let memTimer = null;
 let memBusy = false;
+let memOn = false;
 const MEM_EVERY = 4000;
 function mb(b) {
   if (b == null) return "—";
@@ -823,19 +827,30 @@ function mb(b) {
   return m >= 1024 ? `${(m / 1024).toFixed(2)} GB` : `${Math.round(m)} MB`;
 }
 function memWatch(open) {
-  if (open && !memTimer) {
+  if (open && memOn && !memTimer) {
     measureMem();
     memTimer = setInterval(measureMem, MEM_EVERY);
-  } else if (!open && memTimer) {
+  } else if (!open && memOn) {
+    // Closed: stop, and drop the old numbers so the next open starts clean.
     clearInterval(memTimer);
     memTimer = null;
+    memOn = false;
+    $("mem-start").hidden = false;
+    $("mem-rows").replaceChildren();
+    $("mem-err").hidden = true;
   }
 }
+$("mem-start").onclick = () => {
+  memOn = true;
+  $("mem-start").hidden = true;
+  memWatch(true);
+};
 async function measureMem() {
   if (memBusy) return;
   memBusy = true;
   try {
-    renderMem(await invoke("panel_memory"));
+    const r = await invoke("panel_memory");
+    if (memOn) renderMem(r); // closed meanwhile: drop it
   } catch (e) {
     $("mem-err").textContent = `메모리를 못 잼: ${e}`;
     $("mem-err").hidden = false;
@@ -893,7 +908,7 @@ function memRow(name, bytes, { color, sub, top, total, reloadId } = {}) {
 function renderMem(r) {
   const box = $("mem-rows");
   box.replaceChildren();
-  $("mem-hint").textContent = `${r.method || ""} 설정을 열어 두는 동안 ${MEM_EVERY / 1000}초마다 다시 잼.`.trim();
+  $("mem-hint").textContent = `${r.method || ""} 설정을 닫을 때까지 ${MEM_EVERY / 1000}초마다 다시 잼.`.trim();
   $("mem-err").hidden = !r.error;
   $("mem-err").textContent = r.error ? `일부를 못 잼: ${r.error}` : "";
   const known = r.panels.filter((p) => p.bytes != null).map((p) => p.bytes);
@@ -941,7 +956,7 @@ listen("panel-health", (ev) => {
       seg.title = "";
     }, 30000);
   }
-  if (L && L.settings) measureMem();
+  if (L && L.settings && memOn) measureMem();
 });
 
 listen("layout", (ev) => {

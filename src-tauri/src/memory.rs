@@ -97,7 +97,19 @@ pub async fn measure<R: Runtime>(app: &AppHandle<R>) -> Report {
             .collect()
     };
     let labels: Vec<String> = accounts.iter().map(|a| a.0.clone()).collect();
-    let (procs, method, error) = match collect(app, &labels).await {
+    let n = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let trace = n < TRACE_RUNS;
+    if trace {
+        log::info!("memory #{n}: start, {} panels", labels.len());
+    }
+    let r = collect(app, &labels, trace).await;
+    if trace {
+        match &r {
+            Ok((p, _)) => log::info!("memory #{n}: done, {} processes", p.len()),
+            Err((_, e)) => log::info!("memory #{n}: failed: {e}"),
+        }
+    }
+    let (procs, method, error) = match r {
         Ok((p, m)) => (p, m, None),
         Err((m, e)) => (vec![], m, Some(e)),
     };
@@ -126,6 +138,21 @@ pub async fn measure<R: Runtime>(app: &AppHandle<R>) -> Report {
         Some(sums.values().map(|s| s.0).sum::<u64>() + app_bytes.unwrap_or(0))
     };
     Report { panels, shared, host, app: app_bytes, total, method, error }
+}
+
+/// Measurements so far in this run. The first `TRACE_RUNS` log each step, so
+/// that if one takes the app down the log shows how far it got.
+static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+const TRACE_RUNS: usize = 3;
+
+/// Step log of a traced measurement.
+#[allow(unused_macros)]
+macro_rules! step {
+    ($trace:expr, $($t:tt)*) => {
+        if $trace {
+            log::info!("memory: {}", format!($($t)*));
+        }
+    };
 }
 
 type Collected = Result<(Vec<(u32, Owner, Option<u64>)>, String), (String, String)>;
@@ -165,7 +192,7 @@ async fn recv_n<T: Send + 'static>(rx: std::sync::mpsc::Receiver<T>, n: usize) -
 const METHOD: &str = "개인 작업 집합 기준 (작업 관리자 '메모리' 열). GPU·네트워크 등 WebView2 공용 프로세스는 '공용'으로 따로 셈.";
 
 #[cfg(windows)]
-async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String]) -> Collected {
+async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String], trace: bool) -> Collected {
     use std::sync::mpsc;
     use webview2_com::{
         GetProcessExtendedInfosCompletedHandler,
@@ -182,6 +209,7 @@ async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String]) -> Collected
         let tx = tx.clone();
         let label = label.to_string();
         let sent = wv.with_webview(move |pw| unsafe {
+            step!(trace, "frame id of {label}");
             let id = pw
                 .controller()
                 .CoreWebView2()
@@ -205,6 +233,7 @@ async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String]) -> Collected
         .into_iter()
         .filter_map(|(label, id)| id.map(|id| (id, label)))
         .collect();
+    step!(trace, "{} of {asked} frame ids", frames.len());
 
     // 2. every process with the main frames it runs, through the host
     //    webview (same WebView2 browser process as the panels).
@@ -212,17 +241,22 @@ async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String]) -> Collected
     // (pid, kind, main frame ids)
     let (tx, rx) = mpsc::channel::<Result<Vec<(u32, i32, Vec<u32>)>, String>>();
     host.with_webview(move |pw| unsafe {
+        step!(trace, "asking for processes");
         let start = (|| -> windows::core::Result<()> {
             let core = pw.controller().CoreWebView2()?;
             let env = core.cast::<ICoreWebView2_2>()?.Environment()?;
             let env13 = env.cast::<ICoreWebView2Environment13>()?;
             let tx2 = tx.clone();
             let handler = GetProcessExtendedInfosCompletedHandler::create(Box::new(move |r, list| {
-                let out = r.and_then(|_| read_infos(list)).map_err(|e| e.to_string());
+                step!(trace, "process list came: {r:?}, {}", if list.is_some() { "with list" } else { "no list" });
+                let out = r.and_then(|_| read_infos(list, trace)).map_err(|e| e.to_string());
+                step!(trace, "process list read: {}", match &out { Ok(v) => format!("{} processes", v.len()), Err(e) => e.clone() });
                 let _ = tx2.send(out);
                 Ok(())
             }));
-            env13.GetProcessExtendedInfos(&handler)
+            env13.GetProcessExtendedInfos(&handler)?;
+            step!(trace, "asked");
+            Ok(())
         })();
         if let Err(e) = start {
             let _ = tx.send(Err(format!("WebView2 프로세스 목록을 못 받음 (런타임이 오래됐을 수 있음): {e}")));
@@ -231,6 +265,7 @@ async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String]) -> Collected
     .map_err(|e| (m(), e.to_string()))?;
     let infos = recv(rx).await.and_then(|r| r).map_err(|e| (m(), e))?;
 
+    step!(trace, "reading sizes");
     // 3. sizes, off the main thread.
     let out = tauri::async_runtime::spawn_blocking(move || {
         infos
@@ -264,6 +299,7 @@ async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String]) -> Collected
 #[cfg(windows)]
 unsafe fn read_infos(
     list: Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2ProcessExtendedInfoCollection>,
+    trace: bool,
 ) -> windows::core::Result<Vec<(u32, i32, Vec<u32>)>> {
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     let Some(list) = list else { return Ok(vec![]) };
@@ -277,6 +313,7 @@ unsafe fn read_infos(
         let mut kind = COREWEBVIEW2_PROCESS_KIND::default();
         let _ = info.ProcessId(&mut pid);
         let _ = info.Kind(&mut kind);
+        step!(trace, "process {i}/{n}: pid {pid} kind {}", kind.0);
         let mut mains = vec![];
         if let Ok(it) = ext.AssociatedFrameInfos().and_then(|c| c.GetIterator()) {
             let mut has = windows::core::BOOL::default();
@@ -290,6 +327,7 @@ unsafe fn read_infos(
                 }
             }
         }
+        step!(trace, "process {i}: {} frames", mains.len());
         if pid > 0 {
             out.push((pid as u32, kind.0, mains));
         }
@@ -356,7 +394,7 @@ fn own_size() -> Option<u64> {
 const METHOD: &str = "물리 메모리 기준 (활성 상태 보기 '메모리' 열). 패널마다 웹 콘텐츠 프로세스만 셈. WebKit GPU·네트워크 프로세스는 못 재서 빠짐.";
 
 #[cfg(target_os = "macos")]
-async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String]) -> Collected {
+async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String], trace: bool) -> Collected {
     use objc2::{msg_send, sel};
     use objc2_foundation::NSObjectProtocol;
     use objc2_web_kit::WKWebView;
@@ -385,6 +423,7 @@ async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String]) -> Collected
     }
     drop(tx);
     let got = recv_n(rx, asked).await.map_err(|e| (m(), e))?;
+    step!(trace, "{} of {asked} process ids", got.len());
     if got.iter().all(|(_, p)| p.is_none()) {
         return Err((m(), "웹 콘텐츠 프로세스 번호를 못 얻음 (이 macOS의 WebKit에서 막힘)".into()));
     }
@@ -419,7 +458,7 @@ fn own_size() -> Option<u64> {
 // ---------------------------------------------------------------- other
 
 #[cfg(not(any(windows, target_os = "macos")))]
-async fn collect<R: Runtime>(_app: &AppHandle<R>, _labels: &[String]) -> Collected {
+async fn collect<R: Runtime>(_app: &AppHandle<R>, _labels: &[String], _trace: bool) -> Collected {
     Err((String::new(), "이 OS에서는 지원 안 함".into()))
 }
 
