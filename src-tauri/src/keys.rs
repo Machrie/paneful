@@ -20,8 +20,8 @@ pub const APP: [(&str, &str); 11] = [
     ("bar", "CommandOrControl+Shift+H"),
     ("help", "CommandOrControl+Slash"),
     ("capture", "CommandOrControl+Shift+S"),
-    // The post under the pointer (or X's j/k selection, or the page) in
-    // another panel. Handled in panel.js, which knows the post.
+    // Then a click on a post (or Enter for the page) opens it in another
+    // panel. Handled in panel.js, which knows the post.
     ("send", "CommandOrControl+Shift+O"),
     // Active panel fills the window, again to go back.
     ("zoom", "CommandOrControl+Shift+F"),
