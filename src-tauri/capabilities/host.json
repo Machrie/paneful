@@ -23,6 +23,7 @@
     "allow-pick-save-dir",
     "allow-reset-save-dir",
     "allow-open-save-dir",
+    "allow-open-data-dir",
     "allow-capture-close",
     "allow-capture-slice",
     "allow-capture-export",

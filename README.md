@@ -44,7 +44,12 @@ x.com 전용 경량 데스크톱 앱. 한 창에 x.com 패널을 나란히 띄�
 
 **포터블(zip)**: 설치 없이 압축을 풀고 `Paneful.exe`를 실행하면 된다. 처음 실행할 때 SmartScreen 경고는 설치판과 똑같이 뜬다.
 
-- 계정 데이터(로그인, 설정, 로그)는 설치판과 같은 `%APPDATA%`·`%LOCALAPPDATA%`의 `dev.machrie.paneful`에 저장된다. exe 옆에 저장되지 않으니 USB에 넣고 다른 PC로 옮겨도 로그인은 따라가지 않는다. 설치판과 같은 PC에서 쓰면 계정을 공유한다
+- 설정, 로그, 계정별 로그인 데이터는 exe 옆 `data` 폴더에 저장된다. `Paneful.exe` 옆의 `portable.txt`가 이 동작을 켜는 표시 파일이다. 지우면 설치판처럼 `%APPDATA%`·`%LOCALAPPDATA%`의 `dev.machrie.paneful`을 쓴다
+- 폴더째(`Paneful.exe`, `portable.txt`, `data`) USB 등으로 옮기면 계정 목록, 패널 배치, 단축키 같은 설정은 그대로 따라간다. **로그인은 다른 PC나 다른 Windows 계정에서는 풀린다.** WebView2(Chromium)가 쿠키를 그 PC의 Windows 사용자에 묶인 키(DPAPI)로 암호화하기 때문이다. 새 PC에서는 패널마다 한 번씩 다시 로그인하면 된다. 같은 PC, 같은 Windows 계정에서는 폴더 위치를 옮겨도 로그인이 유지된다
+- **`data` 폴더에는 로그인 쿠키가 들어 있다.** 같은 PC·같은 Windows 계정이면 이 폴더만으로 계정에 접속된다. USB를 잃어버리거나 남에게 폴더를 넘기지 않게 조심하고, 불안하면 X의 설정 → 보안 → 세션에서 해당 세션을 로그아웃시킨다
+- 처음 실행할 때 `data`가 비어 있고 AppData에 예전 데이터(이전 포터블이나 설치판)가 있으면 복사해 온다. 캐시는 빼고 복사하며 AppData 쪽은 건드리지 않는다. 같은 PC·같은 Windows 계정이면 로그인도 유지된다. 복사 중 파일이 잠겨 있는 등으로 실패하면(설치판을 켜 둔 경우 등) 로그인 데이터는 건너뛰고 설정만 가져온다. 이때는 설치판을 끄고 `data` 폴더를 지운 뒤 다시 실행하면 처음부터 다시 복사한다
+- `Program Files`처럼 쓰기 권한이 없는 곳에서 실행하면 경고를 띄우고 AppData에 저장한다. 바탕화면, 문서, USB 같은 곳에 풀어서 쓴다
+- 다운로드·캡쳐 저장 폴더 기본값은 포터블도 `다운로드\Paneful`이다. 설정에서 USB 안 폴더를 골라도 되지만 경로는 드라이브 문자째 저장되니 다른 PC에서 드라이브 문자가 바뀌면 다시 골라야 한다
 - WebView2 런타임이 필요하다. 설치판은 없으면 설치 중에 받아 오지만 포터블은 그렇지 않다. Windows 11과 업데이트된 Windows 10에는 이미 들어 있다. 실행하자마자 꺼지거나 아무 창도 안 뜨면 Microsoft의 [WebView2 런타임](https://developer.microsoft.com/microsoft-edge/webview2/)(Evergreen Bootstrapper)을 설치한다
 
 **스마트 앱 컨트롤**(Windows 11, 설정 → 개인 정보 및 보안 → Windows 보안 → 앱 및 브라우저 컨트롤)이 켜져 있으면 서명 안 된 앱이라 실행이 막힌다. 이 경우엔 우회 버튼이 없다. 스마트 앱 컨트롤을 끌지는 각자 판단할 문제다.
@@ -176,6 +181,7 @@ X가 패널 안에 이미 보여 주는 숫자(왼쪽·아래 메뉴의 **알림
 
 - **패널**: 패널 이름과 순서. 자세한 건 [패널 이름·순서](#패널-이름순서)
 - **저장 폴더**: 이미지·동영상 다운로드와 캡쳐 PNG 저장 위치. 기본은 `다운로드/Paneful`. **변경**은 폴더 선택 창, **열기**는 탐색기(Finder)로 열기, **기본값**은 기본 폴더로 되돌리기
+- **포터블 데이터**(Windows 포터블만): exe 옆 `data` 폴더 위치와 **열기**. 쓰기 권한이 없어 AppData로 대신 저장 중이면 그 이유가 뜬다
 - **단축키**: 키 칸을 누르고 새 조합을 누르면 바뀐다(`Esc` 취소). 줄마다 **기본값**, **끄기**가 있다
   - `Ctrl`·`Alt`·`⌘` 중 하나는 같이 눌러야 한다(글 쓰다가 눌리는 것 방지). `F1`~`F24`는 단독도 된다
   - 다른 Paneful 단축키나 `Ctrl+1~9`와 겹치면 거부한다
@@ -224,7 +230,7 @@ GitHub [Releases](https://github.com/Machrie/paneful/releases)에 새 버전이 
 
 앱에서 계정을 먼저 **삭제**해 두면 로그인 정보까지 같이 지워진다. 그 다음:
 
-- **Windows**: 설정 → 앱 → 설치된 앱에서 Paneful 제거(포터블은 폴더째 삭제). 설정과 로그 폴더가 남으면 `%APPDATA%\dev.machrie.paneful`, `%LOCALAPPDATA%\dev.machrie.paneful`을 지운다
+- **Windows**: 설정 → 앱 → 설치된 앱에서 Paneful 제거(포터블은 폴더째 삭제하면 `data`까지 같이 지워진다). 설치판의 설정과 로그 폴더가 남으면 `%APPDATA%\dev.machrie.paneful`, `%LOCALAPPDATA%\dev.machrie.paneful`을 지운다
 - **macOS**: `응용 프로그램`의 `Paneful`을 휴지통으로. 설정은 `~/Library/Application Support/dev.machrie.paneful`, 로그는 `~/Library/Logs/dev.machrie.paneful`에 남는다
 
 ## 문제가 생기면

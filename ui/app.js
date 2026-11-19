@@ -166,7 +166,7 @@ function render() {
   if (!L.settings && rec) stopRec();
   document.documentElement.style.setProperty("--top", `${L.top}px`);
   const s = L.panels.map((p) => `${p.id}\u0000${p.label}\u0000${p.color}`).join("\u0001");
-  const ks = JSON.stringify([L.keys, L.global, L.hotkey, L.hotkey_error, L.save_dir]);
+  const ks = JSON.stringify([L.keys, L.global, L.hotkey, L.hotkey_error, L.save_dir, L.data_dir, L.data_warning]);
   if (ks !== keysShape && !rec) {
     keysShape = ks;
     buildKeys();
@@ -503,10 +503,19 @@ $("save-pick").onclick = async () => {
   }
 };
 $("save-open").onclick = () => invoke("open_save_dir").catch((e) => settingsMsg(e, true));
+$("data-open").onclick = () => invoke("open_data_dir").catch((e) => settingsMsg(e, true));
 $("save-reset").onclick = () =>
   invoke("reset_save_dir").then(() => settingsMsg("기본 폴더로 되돌림"), (e) => settingsMsg(e, true));
 
 function buildSettings() {
+  $("data-section").hidden = !L.data_dir && !L.data_warning;
+  $("data-row").hidden = !L.data_dir;
+  $("data-dir").textContent = L.data_dir || "";
+  $("data-dir").title = L.data_dir || "";
+  if (L.data_warning) {
+    $("data-hint").textContent = L.data_warning;
+    $("data-hint").classList.add("warn");
+  }
   $("save-dir").textContent = L.save_dir || "(다운로드 폴더를 찾지 못함)";
   $("save-dir").title = L.save_dir;
   $("save-reset").disabled = L.save_dir_default;
