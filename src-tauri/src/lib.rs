@@ -7,6 +7,7 @@
 
 mod keys;
 mod capture;
+mod snap;
 mod layout;
 mod media;
 mod nav;
@@ -314,7 +315,8 @@ fn purge_pending_profiles(app: &tauri::App, s: &mut Settings) {
 
 // ---------------------------------------------------------------- commands
 // The host webview may call these (capabilities/host.json); x.com panels only
-// panel_focused, shortcut and capture_posts (capabilities/panel.json). Commands are async
+// panel_focused, shortcut, panel_keys and capture_begin/shot/drop/finish
+// (capabilities/panel.json). Commands are async
 // because add_child from a sync command deadlocks on WebView2.
 
 #[tauri::command]
@@ -906,9 +908,12 @@ pub fn run() {
             pick_save_dir,
             reset_save_dir,
             open_save_dir,
-            capture::capture_posts,
+            capture::capture_begin,
+            capture::capture_shot,
+            capture::capture_drop,
+            capture::capture_finish,
             capture::capture_close,
-            capture::capture_image,
+            capture::capture_slice,
             capture::capture_export
         ])
         .run(tauri::generate_context!())

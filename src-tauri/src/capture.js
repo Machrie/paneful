@@ -1,13 +1,24 @@
-// Paneful: post capture (x.com panels only).
+// Paneful: post capture (x.com panels only). X as it looks, cut out post by
+// post, with avatars, names and @handles swapped for 익명N in the masked copy.
 //
-// Ctrl/Cmd+Shift+S (mapped in panel.js / ui/app.js like the other app
-// shortcuts) or the top bar button -> click the first post -> click
-// the last post. X's timeline keeps only the posts near the screen in the
-// DOM, so after both ends are picked the script scrolls from the upper one
-// to the lower one itself and reads each post as it passes. Only what the
-// page already shows (or already received) is read; no requests are made.
-// The posts go to Rust (`capture_posts`), and the host UI draws them as
-// cards, anonymizes them and makes the PNG.
+// The capture shortcut (mapped in panel.js / ui/app.js, configurable) or the
+// top bar button -> click the first post -> click the last post (the same
+// post again, or Enter, for just that one). X keeps only the posts near the
+// screen in the DOM, so the range is then walked twice by scrolling:
+//
+// 1. scan: number everyone in the range in order of appearance (authors,
+//    quoted authors, mentions), so a name is masked even in a post above
+//    its owner's first post.
+// 2. shoot: from the first post down, per screen:
+//    - hide X's sticky/fixed bars that overlap the column
+//    - screenshot without masks, then lay the masks (own shadow root, over
+//      the page, X's DOM is not touched) and screenshot again; Rust keeps
+//      only the post rectangles (capture.rs)
+//    - every rectangle and mask position is measured before and after each
+//      screenshot; if anything moved, the shot is dropped and retaken, so a
+//      frame where a mask may be off is never kept
+//
+// Nothing is requested from X; only what the page shows is read.
 (() => {
   if (window.top !== window || window.__panefulCapture) return;
   Object.defineProperty(window, "__panefulCapture", { value: true });
@@ -16,198 +27,46 @@
   const MAX_STEPS = 600;
   const STATUS_RE = /^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)/;
   const HANDLE_RE = /^@([A-Za-z0-9_]{1,15})$/;
-  const MEDIA_RE = /^https:\/\/pbs\.twimg\.com\/(media|ext_tw_video_thumb|amplify_video_thumb|tweet_video_thumb|card_img)\//;
-  const AVATAR_RE = /^https:\/\/pbs\.twimg\.com\/profile_images\//;
+  const MENTION_RE = /(^|[^A-Za-z0-9_@])@([A-Za-z0-9_]{1,15})(?![A-Za-z0-9_])/g;
+  const ANON = ["#1d9bf0", "#f91880", "#00ba7c", "#ffad1f", "#7856ff", "#ff7a00", "#e0245e", "#17bf63", "#8b98a5"];
 
-  // ------------------------------------------------ full text of long posts
-  // Timelines cut long posts ("Show more"). The full text is in API
-  // responses the page already received: tap them read-only, like media.js.
-  const notes = new Map(); // rest_id -> text with t.co links expanded
-  const MAX_NOTES = 3000;
-  function noteOf(o) {
-    const r = o.note_tweet && o.note_tweet.note_tweet_results && o.note_tweet.note_tweet_results.result;
-    if (!r || typeof r.text !== "string") return;
-    let text = r.text;
-    const urls = (r.entity_set && r.entity_set.urls) || [];
-    for (const u of urls) {
-      if (u && typeof u.url === "string" && typeof u.display_url === "string") {
-        text = text.split(u.url).join(u.display_url);
-      }
-    }
-    notes.set(o.rest_id, text);
-    if (notes.size > MAX_NOTES) notes.delete(notes.keys().next().value);
-  }
-  function walkApi(o, depth) {
-    if (!o || typeof o !== "object" || depth > 60) return;
-    if (Array.isArray(o)) {
-      for (const x of o) walkApi(x, depth + 1);
-      return;
-    }
-    if (typeof o.rest_id === "string" && o.note_tweet) noteOf(o);
-    for (const k in o) {
-      const v = o[k];
-      if (v && typeof v === "object") walkApi(v, depth + 1);
-    }
-  }
-  const isApi = (u) => typeof u === "string" && /^https:\/\/(?:x|twitter)\.com\/i\/api\//.test(u);
-  const absorb = (text) => {
-    if (typeof text !== "string" || text.indexOf("note_tweet_results") < 0) return;
-    try {
-      walkApi(JSON.parse(text), 0);
-    } catch (_) {}
-  };
-  const XHR = XMLHttpRequest.prototype;
-  const origOpen = XHR.open;
-  XHR.open = function (method, url) {
-    try {
-      if (isApi(new URL(url, location.href).href)) {
-        this.addEventListener("load", function () {
-          try {
-            if (this.responseType === "" || this.responseType === "text") absorb(this.responseText);
-            else if (this.responseType === "json") walkApi(this.response, 0);
-          } catch (_) {}
-        });
-      }
-    } catch (_) {}
-    return origOpen.apply(this, arguments);
-  };
-  const origFetch = window.fetch;
-  window.fetch = function (input) {
-    const p = origFetch.apply(this, arguments);
-    try {
-      const u = typeof input === "string" ? input : input && input.url;
-      if (isApi(new URL(u, location.href).href)) p.then((r) => r.clone().text().then(absorb)).catch(() => {});
-    } catch (_) {}
-    return p;
+  const call = (cmd, args) => {
+    const t = window.__TAURI_INTERNALS__;
+    if (!t) return Promise.reject(new Error("앱과 연결이 안 됐다. 패널을 새로고침해라"));
+    return t.invoke(cmd, args || {});
   };
 
-  // ------------------------------------------------ reading one post
+  // ------------------------------------------------ reading posts
   const isEmoji = (img) => /\/emoji\//.test(img.src || "");
 
-  // Text with mentions kept apart, so the host UI can anonymize them.
-  // -> [{t: "text"} | {t: "@name", m: "name"} | {t: "#tag", l: true}]
-  function richText(root, inName) {
-    const out = [];
-    // m: mentioned handle, l: link / hashtag (drawn in blue)
-    const push = (t, m, l) => {
-      if (!t) return;
-      const last = out[out.length - 1];
-      if (!m && !l && last && !last.m && !last.l) last.t += t;
-      else out.push(m ? { t, m } : l ? { t, l: true } : { t });
-    };
+  // Visible text of an element, emoji as their alt text.
+  function textOf(root) {
+    let out = "";
     const visit = (n) => {
-      if (n.nodeType === 3) return push(n.nodeValue);
+      if (n.nodeType === 3) return void (out += n.nodeValue);
       if (n.nodeType !== 1) return;
-      const tag = n.tagName;
-      if (tag === "BR") return push("\n");
-      if (tag === "IMG") return isEmoji(n) ? push(n.alt || "") : undefined;
-      if (tag === "SVG" || tag === "svg" || tag === "STYLE" || tag === "SCRIPT") return;
-      if (tag === "A") {
-        const vis = (n.innerText || n.textContent || "").trim();
-        const m = HANDLE_RE.exec(vis);
-        if (m) return push(vis, m[1]);
-        // Emoji are <img>, which innerText drops: walk the children then.
-        // Otherwise innerText, which skips the hidden parts of shortened URLs.
-        if (![...n.querySelectorAll("img")].some(isEmoji)) return push(n.innerText || n.textContent || "", null, !inName);
-        for (const c of n.childNodes) visit(c);
-        return;
-      }
+      if (n.tagName === "IMG") return void (isEmoji(n) && (out += n.alt || ""));
+      if (n.tagName === "svg" || n.tagName === "SVG") return;
       for (const c of n.childNodes) visit(c);
     };
     visit(root);
-    return out;
-  }
-  const plain = (segs) => segs.map((s) => s.t).join("");
-
-  // Mentions in plain text (API text has no links).
-  function splitMentions(text) {
-    const out = [];
-    const re = /(^|[^A-Za-z0-9_@])@([A-Za-z0-9_]{1,15})(?![A-Za-z0-9_])/g;
-    let last = 0;
-    let m;
-    while ((m = re.exec(text))) {
-      const at = m.index + m[1].length;
-      if (at > last) out.push({ t: text.slice(last, at) });
-      out.push({ t: "@" + m[2], m: m[2] });
-      last = at + 1 + m[2].length;
-    }
-    if (last < text.length) out.push({ t: text.slice(last) });
-    return out;
+    return out.replace(/\s+/g, " ").trim();
   }
 
-  function nameAndHandle(userName) {
-    let handle = "";
+  function handleSpan(userName) {
     for (const s of userName.querySelectorAll("span")) {
-      const m = HANDLE_RE.exec((s.textContent || "").trim());
-      if (m) {
-        handle = m[1];
-        break;
-      }
-    }
-    const first = userName.firstElementChild || userName;
-    let name = plain(richText(first, true)).replace(/\s+/g, " ").trim();
-    if (!name || name === "@" + handle) name = handle;
-    return { name: name.slice(0, 100), handle };
-  }
-
-  function mediaSrc(src) {
-    // Displayed size is often "small"/"360x360": ask for one that is sharp
-    // at 2x in a 600px card, but not the original.
-    try {
-      const u = new URL(src);
-      if (u.searchParams.has("name")) u.searchParams.set("name", "medium");
-      return u.href;
-    } catch (_) {
-      return src;
-    }
-  }
-
-  function mediaIn(root, skip) {
-    const out = [];
-    const seen = new Set();
-    for (const el of root.querySelectorAll("img, video")) {
-      if (skip && skip(el)) continue;
-      if (el.closest('[data-testid="card.wrapper"]')) continue;
-      let src = "";
-      let video = false;
-      if (el.tagName === "VIDEO") {
-        src = el.poster || "";
-        video = true;
-      } else {
-        src = el.src || "";
-        video = /_thumb\//.test(src) || !!el.closest('[data-testid="videoPlayer"], [data-testid="videoComponent"]');
-      }
-      if (!MEDIA_RE.test(src) || /\/card_img\//.test(src)) continue;
-      src = mediaSrc(src);
-      if (seen.has(src)) continue;
-      seen.add(src);
-      const box = el.closest('[data-testid="tweetPhoto"], [data-testid="videoPlayer"], [data-testid="videoComponent"]') || el;
-      const r = box.getBoundingClientRect();
-      let w = el.naturalWidth || el.videoWidth || r.width;
-      let h = el.naturalHeight || el.videoHeight || r.height;
-      if (!(w > 0 && h > 0)) (w = 16), (h = 9);
-      out.push({ src, video, w, h });
-      if (out.length >= 4) break;
-    }
-    return out;
-  }
-
-  function avatarIn(root, skip) {
-    for (const img of root.querySelectorAll('[data-testid="Tweet-User-Avatar"] img, img')) {
-      if (skip && skip(img)) continue;
-      if (AVATAR_RE.test(img.src || "")) return img.src.replace(/_(normal|mini|bigger|x96)\./, "_bigger.");
+      if (HANDLE_RE.test((s.textContent || "").trim())) return s;
     }
     return null;
   }
 
-  function statusLink(root, skip) {
-    for (const t of root.querySelectorAll("time")) {
-      if (skip && skip(t)) continue;
-      const a = t.closest("a");
-      const m = a && STATUS_RE.exec(new URL(a.href, location.href).pathname);
-      return { time: t.getAttribute("datetime") || null, id: m ? m[2] : null, owner: m ? m[1] : null };
-    }
-    return { time: null, id: null, owner: null };
+  function who(userName) {
+    const hs = handleSpan(userName);
+    const handle = hs ? HANDLE_RE.exec(hs.textContent.trim())[1] : "";
+    const nameEl = userName.firstElementChild || userName;
+    let name = textOf(nameEl);
+    if (name === "@" + handle) name = "";
+    return { handle, name, nameEl, handleEl: hs };
   }
 
   function quoteBoxOf(article) {
@@ -219,67 +78,38 @@
     return null;
   }
 
-  function extract(article) {
+  function keyOf(article) {
+    for (const t of article.querySelectorAll("time")) {
+      const a = t.closest("a");
+      const m = a && STATUS_RE.exec(new URL(a.href, location.href).pathname);
+      if (m) return m[2];
+    }
+    const un = article.querySelector('[data-testid="User-Name"]');
+    const tt = article.querySelector('[data-testid="tweetText"]');
+    return "k:" + (un ? textOf(un) : "") + ":" + (tt ? textOf(tt).slice(0, 80) : "");
+  }
+
+  // Parts of one post: author, quoted post, text blocks.
+  function partsOf(article) {
     const qbox = quoteBoxOf(article);
-    const outside = (el) => !!(qbox && qbox.contains(el));
-    const userName = [...article.querySelectorAll('[data-testid="User-Name"]')].find((u) => !outside(u));
-    if (!userName) return null;
-    const { name, handle } = nameAndHandle(userName);
-    const st = statusLink(article, outside);
-
-    const textEl = [...article.querySelectorAll('[data-testid="tweetText"]')].find((t) => !outside(t));
-    let text = textEl ? richText(textEl) : [];
-    let truncated = !!article.querySelector('[data-testid="tweet-text-show-more-link"]');
-    if (truncated && st.id && notes.has(st.id)) {
-      text = splitMentions(notes.get(st.id));
-      truncated = false;
-    }
-
-    let card = null;
-    const cw = [...article.querySelectorAll('[data-testid="card.wrapper"]')].find((c) => !outside(c));
-    if (cw) {
-      const lines = (cw.innerText || "")
-        .split("\n")
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .slice(0, 3)
-        .map((s) => s.slice(0, 200));
-      const img = [...cw.querySelectorAll("img")].find((i) => MEDIA_RE.test(i.src || ""));
-      card = {
-        lines,
-        img: img ? { src: img.src, video: false, w: img.naturalWidth || 16, h: img.naturalHeight || 9 } : null,
-      };
-      if (!lines.length && !card.img) card = null;
-    }
-
-    let quote = null;
-    if (qbox) {
-      const qn = qbox.querySelector('[data-testid="User-Name"]');
-      const q = nameAndHandle(qn);
-      const qt = qbox.querySelector('[data-testid="tweetText"]');
-      const qs = statusLink(qbox);
-      quote = {
-        name: q.name,
-        handle: q.handle,
-        avatar: avatarIn(qbox),
-        time: qs.time,
-        text: qt ? richText(qt) : [],
-        media: mediaIn(qbox),
-      };
-    }
-
-    const key = st.id || "k:" + handle + ":" + plain(text).slice(0, 80);
+    const inQuote = (el) => !!(qbox && qbox.contains(el));
+    const names = [...article.querySelectorAll('[data-testid="User-Name"]')];
+    const un = names.find((u) => !inQuote(u));
+    const qun = qbox && names.find((u) => inQuote(u));
+    const avatarOf = (root, skip) =>
+      [...root.querySelectorAll('[data-testid="Tweet-User-Avatar"]')].find((a) => !skip || !skip(a)) ||
+      [...root.querySelectorAll("img")].find((i) => /\/profile_images\//.test(i.src || "") && (!skip || !skip(i)));
     return {
-      key,
-      name,
-      handle,
-      avatar: avatarIn(article, outside),
-      time: st.time,
-      text,
-      truncated,
-      media: mediaIn(article, outside),
-      card,
-      quote,
+      author: un ? who(un) : null,
+      avatar: avatarOf(article, inQuote),
+      quote: qun ? who(qun) : null,
+      qavatar: qbox ? avatarOf(qbox) : null,
+      texts: [...article.querySelectorAll('[data-testid="tweetText"]')],
+      social: [...article.querySelectorAll('[data-testid="socialContext"]')],
+      // @handle links outside the name lines: text mentions, "Replying to @x"
+      mentions: [...article.querySelectorAll("a")].filter(
+        (a) => !a.closest('[data-testid="User-Name"]') && HANDLE_RE.test((a.textContent || "").trim()),
+      ),
     };
   }
 
@@ -293,18 +123,138 @@
       .map((x) => x.a);
   }
 
-  // ------------------------------------------------ UI (own shadow root)
+  // ------------------------------------------------ people: 익명1..N
+  function newPeople() {
+    const ids = new Map(); // handle (lower case) or "name:..." -> n
+    const names = new Map(); // display name -> n
+    const add = (handle, name) => {
+      const k = handle ? handle.toLowerCase() : name ? "name:" + name : "";
+      if (!k) return 0;
+      if (!ids.has(k)) ids.set(k, ids.size + 1);
+      const n = ids.get(k);
+      // Display names are also masked where they appear in text: as shown
+      // and without their emoji ("김철수 🍀" -> also "김철수").
+      for (const v of [name, (name || "").replace(/[\p{Extended_Pictographic}️‍]/gu, "").trim()]) {
+        if (v && v.length >= 2 && !names.has(v)) names.set(v, n);
+      }
+      return n;
+    };
+    const n = (handle, name) => ids.get(handle ? handle.toLowerCase() : "name:" + name) || add(handle, name);
+    return { ids, names, add, n };
+  }
+
+  function scanPeople(P, article) {
+    const p = partsOf(article);
+    if (p.author) P.add(p.author.handle, p.author.name);
+    if (p.quote) P.add(p.quote.handle, p.quote.name);
+    for (const a of p.mentions) P.add(HANDLE_RE.exec(a.textContent.trim())[1]);
+    for (const t of p.texts) for (const m of (t.textContent || "").matchAll(MENTION_RE)) P.add(m[2]);
+  }
+
+  // ------------------------------------------------ masks
+  // A mask: rectangles (viewport CSS px) + what to draw over them.
+  function bgOf(el) {
+    // Stack of backgrounds down to the first opaque one (hover highlights
+    // are translucent), so the mask matches what is under the text.
+    const layers = [];
+    for (let e = el; e && e.nodeType === 1; e = e.parentElement) {
+      const c = getComputedStyle(e).backgroundColor;
+      const m = /rgba?\(([^)]+)\)/.exec(c);
+      if (!m) continue;
+      const parts = m[1].split(",").map((s) => parseFloat(s));
+      const a = parts.length > 3 ? parts[3] : 1;
+      if (a === 0) continue;
+      layers.push(c);
+      if (a >= 1) break;
+    }
+    if (!layers.length || !/rgb\(|, 1\)$/.test(layers[layers.length - 1])) layers.push(pageBg());
+    return layers;
+  }
+  function pageBg() {
+    for (const e of [document.body, document.documentElement]) {
+      const c = e && getComputedStyle(e).backgroundColor;
+      if (c && !/rgba\(0, 0, 0, 0\)|transparent/.test(c)) return c;
+    }
+    return "rgb(0, 0, 0)";
+  }
+
+  function textMask(el, rects, text) {
+    const cs = getComputedStyle(el);
+    return { kind: "text", rects: [...rects].filter((r) => r.width > 0 && r.height > 0), text, cs, bg: bgOf(el) };
+  }
+
+  // Ranges of `re` matches in the text nodes of root (not inside links).
+  function rangesIn(root, re) {
+    const out = [];
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = w.nextNode(); n; n = w.nextNode()) {
+      if (n.parentElement && n.parentElement.closest("a")) continue;
+      re.lastIndex = 0;
+      for (const m of n.nodeValue.matchAll(re)) {
+        const r = document.createRange();
+        const at = m.index + (m.groups && m.groups.pre ? m.groups.pre.length : 0);
+        const len = m[0].length - (at - m.index);
+        r.setStart(n, at);
+        r.setEnd(n, at + len);
+        out.push({ range: r, match: m[0].slice(at - m.index), node: n });
+      }
+    }
+    return out;
+  }
+
+  const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  function masksFor(article, P) {
+    const p = partsOf(article);
+    const out = [];
+    const person = (w, avatar) => {
+      if (!w) return;
+      const n = P.n(w.handle, w.name);
+      if (avatar) {
+        const img = avatar.querySelector ? avatar.querySelector("img") : null;
+        const box = (img && img.getBoundingClientRect().width > 4 ? img : avatar).getBoundingClientRect();
+        if (box.width > 0) out.push({ kind: "avatar", rects: [box], n, bg: bgOf(avatar.parentElement || avatar) });
+      }
+      if (w.nameEl) out.push(textMask(w.nameEl, [w.nameEl.getBoundingClientRect()], `익명${n}`));
+      if (w.handleEl) out.push(textMask(w.handleEl, [w.handleEl.getBoundingClientRect()], `@익명${n}`));
+    };
+    person(p.author, p.avatar);
+    person(p.quote, p.qavatar);
+    for (const a of p.mentions) {
+      const h = HANDLE_RE.exec(a.textContent.trim())[1];
+      out.push(textMask(a, a.getClientRects(), `@익명${P.n(h)}`));
+    }
+    for (const s of p.social) out.push(textMask(s, [s.getBoundingClientRect()], ""));
+    // Unlinked @handles and the display names of everyone in the range.
+    const names = [...P.names.keys()].sort((a, b) => b.length - a.length).map(escRe);
+    const re = new RegExp(
+      `(?<pre>^|[^A-Za-z0-9_@])@[A-Za-z0-9_]{1,15}(?![A-Za-z0-9_])` + (names.length ? `|${names.join("|")}` : ""),
+      "gu",
+    );
+    for (const t of p.texts) {
+      for (const { range, match, node } of rangesIn(t, re)) {
+        const text = match.startsWith("@") ? `@익명${P.n(match.slice(1))}` : `익명${P.names.get(match)}`;
+        out.push(textMask(node.parentElement, range.getClientRects(), text));
+      }
+    }
+    return out;
+  }
+
+  // ------------------------------------------------ overlay (own shadow root)
   let host = null;
+  let root = null;
   let banner = null;
   let hover = null;
   let mark = null;
+  let maskLayer = null;
   const css = (el, s) => (el.style.cssText = s);
+  const mctx = document.createElement("canvas").getContext("2d");
 
   function ensureUi() {
     if (host && host.isConnected) return;
     host = document.createElement("div");
     css(host, "position:fixed;inset:0;z-index:2147483646;pointer-events:none;");
-    const root = host.attachShadow({ mode: "closed" });
+    root = host.attachShadow({ mode: "closed" });
     const box = (color, fill) => {
       const d = document.createElement("div");
       css(
@@ -314,6 +264,8 @@
       );
       return d;
     };
+    maskLayer = document.createElement("div");
+    css(maskLayer, "position:fixed;inset:0;pointer-events:none;");
     hover = box("#1d9bf0", "rgba(29,155,240,.08)");
     mark = box("#00ba7c", "rgba(0,186,124,.10)");
     banner = document.createElement("div");
@@ -324,13 +276,14 @@
         "background:rgba(29,155,240,.95);border-radius:999px;padding:8px 16px;" +
         "box-shadow:0 2px 12px rgba(0,0,0,.4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;",
     );
-    root.append(hover, mark, banner);
+    root.append(maskLayer, hover, mark, banner);
     document.documentElement.appendChild(host);
   }
 
   function say(text) {
     ensureUi();
     banner.textContent = text;
+    banner.style.display = text ? "block" : "none";
     host.style.display = "block";
   }
 
@@ -346,17 +299,86 @@
     });
   }
 
-  // ------------------------------------------------ state machine
-  // idle -> start (pick first) -> end (pick last) -> busy (scrolling) -> idle
+  function drawMasks(masks) {
+    maskLayer.replaceChildren();
+    for (const m of masks) {
+      m.rects.forEach((r, i) => {
+        const d = document.createElement("div");
+        const bg = m.bg.map((c) => `linear-gradient(${c},${c})`).join(",");
+        css(
+          d,
+          `position:fixed;left:${r.left - 1}px;top:${r.top - 1}px;width:${r.width + 2}px;height:${r.height + 2}px;` +
+            `background:${bg};overflow:hidden;`,
+        );
+        if (m.kind === "avatar") {
+          const s = Math.min(r.width, r.height);
+          const c = document.createElement("div");
+          css(
+            c,
+            `position:absolute;left:1px;top:1px;width:${s}px;height:${s}px;border-radius:50%;` +
+              `background:${ANON[(m.n - 1) % ANON.length]};color:#fff;display:flex;align-items:center;` +
+              `justify-content:center;font:700 ${Math.round(s * (m.n > 99 ? 0.32 : 0.42))}px/1 ` +
+              `system-ui,-apple-system,'Segoe UI',sans-serif;`,
+          );
+          c.textContent = String(m.n);
+          d.append(c);
+        } else if (i === 0 && m.text) {
+          // Same font and color as the text it covers, shrunk to fit.
+          const cs = m.cs;
+          let size = parseFloat(cs.fontSize) || 15;
+          mctx.font = `${cs.fontWeight} ${size}px ${cs.fontFamily}`;
+          const w = mctx.measureText(m.text).width;
+          if (w > r.width && w > 0) size = Math.max(7, (size * r.width) / w);
+          const t = document.createElement("span");
+          css(
+            t,
+            `position:absolute;left:1px;top:0;height:100%;display:flex;align-items:center;white-space:nowrap;` +
+              `font-family:${cs.fontFamily};font-weight:${cs.fontWeight};font-size:${size}px;color:${cs.color};`,
+          );
+          t.textContent = m.text;
+          d.append(t);
+        }
+        maskLayer.append(d);
+      });
+    }
+  }
+
+  // ------------------------------------------------ X's own fixed / sticky bars
+  const hidden = new Map(); // element -> previous inline visibility
+  function hideBars(col) {
+    const xs = [col.left + 4, col.left + col.width / 2, col.right - 4];
+    for (let y = 1; y < window.innerHeight; y += 16) {
+      for (const x of xs) {
+        for (const el of document.elementsFromPoint(x, y)) {
+          if (el === host) continue;
+          for (let e = el; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+            if (hidden.has(e)) break;
+            const pos = getComputedStyle(e).position;
+            if (pos !== "fixed" && pos !== "sticky") continue;
+            if (e.querySelector('article[data-testid="tweet"]')) break;
+            hidden.set(e, e.style.visibility);
+            e.style.visibility = "hidden";
+            break;
+          }
+        }
+      }
+    }
+  }
+  function showBars() {
+    for (const [e, v] of hidden) e.style.visibility = v;
+    hidden.clear();
+  }
+
+  // ------------------------------------------------ picking
+  // idle -> start (pick first) -> end (pick last) -> busy -> idle
   let mode = "idle";
   let first = null; // { key, y }
   let hovered = null;
   let abort = false;
 
-
   function startMode() {
     if (mode === "busy") return;
-    if (mode !== "idle") return stop();
+    if (mode !== "idle") return stop("캡쳐 취소");
     mode = "start";
     first = null;
     say("캡쳐: 첫 게시물을 클릭 · 취소 Esc");
@@ -370,6 +392,8 @@
     if (!host) return;
     hover.style.display = "none";
     mark.style.display = "none";
+    maskLayer.replaceChildren();
+    host.style.pointerEvents = "none";
     if (msg) {
       say(msg);
       setTimeout(() => mode === "idle" && host && (host.style.display = "none"), 2500);
@@ -380,19 +404,17 @@
 
   const articleAt = (t) => (t instanceof Element ? t.closest('article[data-testid="tweet"]') : null);
   const absY = (a) => a.getBoundingClientRect().top + window.scrollY;
-  const markedArticle = () => first && articles().find((a) => (extract(a) || {}).key === first.key);
+  const findByKey = (key) => articles().find((a) => keyOf(a) === key);
 
   function onPick(a) {
-    const p = extract(a);
-    if (!p) return;
     if (mode === "start") {
-      first = { key: p.key, y: absY(a) };
+      first = { key: keyOf(a), y: absY(a) };
       mode = "end";
       frame(mark, a);
-      say("마지막 게시물을 클릭 (스크롤해서 찾기) · 같은 게시물을 다시 누르면 그 하나만 · 취소 Esc");
+      say("마지막 게시물을 클릭 (스크롤해서 찾기) · 이 게시물만이면 Enter 또는 한 번 더 클릭 · 취소 Esc");
       return;
     }
-    if (mode === "end") collect(first, { key: p.key, y: absY(a) });
+    if (mode === "end") run(first, { key: keyOf(a), y: absY(a) });
   }
 
   // Swallow clicks on posts while picking, so X doesn't open them.
@@ -429,13 +451,12 @@
     () => {
       if (mode !== "start" && mode !== "end") return;
       frame(hover, hovered);
-      frame(mark, markedArticle());
+      frame(mark, first && findByKey(first.key));
     },
     true,
   );
   // Busy: keep the user's wheel / keys from fighting the auto scroll.
   window.addEventListener("wheel", (e) => mode === "busy" && e.preventDefault(), { capture: true, passive: false });
-
   window.addEventListener(
     "keydown",
     (e) => {
@@ -446,6 +467,12 @@
         stop("캡쳐 취소");
         return;
       }
+      if (mode === "end" && (e.code === "Enter" || e.code === "NumpadEnter") && !e.repeat) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        run(first, first);
+        return;
+      }
       if (mode === "busy") {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -453,102 +480,225 @@
     },
     true,
   );
-  // The capture shortcut (panel.js / ui/app.js -> Rust) and the top bar
-  // button both arrive as this event; pressing it again while picking cancels.
+  // The capture shortcut and the top bar button arrive as this event;
+  // pressing it again while picking cancels.
   window.addEventListener("paneful-capture", startMode);
 
-  // ------------------------------------------------ auto scroll + collect
+  // ------------------------------------------------ scrolling helpers
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  const settle = async () => {
-    await wait(220);
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const settle = async (ms) => {
+    await wait(ms);
+    await frames();
   };
   const scrollTo = (y) => window.scrollTo({ top: Math.max(0, y), behavior: "instant" });
 
   async function findArticle(target) {
-    const has = () => articles().some((a) => (extract(a) || {}).key === target.key);
     const vh = window.innerHeight;
     for (const off of [0, -0.5, -1, 0.5, 1, -2, 2, -3, 3]) {
       scrollTo(target.y - 120 + off * vh);
-      await settle();
-      if (abort) return false;
-      if (has()) return true;
+      await settle(200);
+      if (abort) return null;
+      const a = findByKey(target.key);
+      if (a) return a;
     }
-    return false;
+    return null;
   }
 
-  async function collect(a, b) {
+  // Scan pass: keys in order from top to bottom, and everyone in them.
+  async function scan(top, bottom, P) {
+    const keys = [];
+    const seen = new Set();
+    const above = new Set();
+    let started = false;
+    let last = null;
+    if (!(await findArticle(top))) throw new Error("첫 게시물을 다시 찾지 못했다");
+    let stuck = 0;
+    for (let step = 0; step < MAX_STEPS && !abort; step++) {
+      const arts = articles();
+      const from = last ? arts.findIndex((a) => keyOf(a) === last) : -1;
+      for (const a of from >= 0 ? arts.slice(from + 1) : arts) {
+        const k = keyOf(a);
+        if (!started) {
+          if (k !== top.key) {
+            above.add(k);
+            continue;
+          }
+          started = true;
+        }
+        if (above.has(k) || seen.has(k)) continue;
+        seen.add(k);
+        keys.push(k);
+        last = k;
+        scanPeople(P, a);
+        if (k === bottom.key || keys.length >= MAX_POSTS) return { keys, cut: k !== bottom.key };
+      }
+      say(`캡쳐: 범위 확인 중… ${keys.length}개`);
+      const before = window.scrollY;
+      window.scrollBy({ top: Math.round(window.innerHeight * 0.7), behavior: "instant" });
+      await settle(150);
+      if (Math.abs(window.scrollY - before) < 2) {
+        if (++stuck >= 3) break;
+      } else stuck = 0;
+    }
+    return { keys, cut: true };
+  }
+
+  // ------------------------------------------------ shoot pass
+  // Rectangles of the posts in `keys` visible now, from the cursor down.
+  // cursor = { i: index in keys, off: px of that post already taken }
+  function plan(keys, cur) {
+    const vh = window.innerHeight;
+    const byKey = new Map(articles().map((a) => [keyOf(a), a]));
+    const crops = [];
+    let next = { ...cur };
+    for (let i = cur.i; i < keys.length; i++) {
+      const a = byKey.get(keys[i]);
+      if (!a) break; // not rendered yet: scroll on
+      const r = a.getBoundingClientRect();
+      const off = i === cur.i ? cur.off : 0;
+      if (off >= r.height - 0.5) {
+        next = { i: i + 1, off: 0 };
+        continue;
+      }
+      const top = r.top + off;
+      if (top >= vh - 1) break;
+      if (top < -1) return null; // part of it is above the screen: re-scroll
+      const bottom = Math.min(r.bottom, vh);
+      crops.push({ x: r.left, y: top, w: r.width, h: bottom - top, a });
+      if (bottom < r.bottom - 0.5) {
+        next = { i, off: off + (bottom - top) };
+        break;
+      }
+      next = { i: i + 1, off: 0 };
+    }
+    return { crops, next };
+  }
+
+  // Everything a shot depends on, rounded: if this changes between before
+  // and after a screenshot, the shot is not used.
+  function signature(crops, masks) {
+    const r = (v) => Math.round(v * 2);
+    const parts = [window.scrollY, window.innerWidth, window.innerHeight];
+    for (const c of crops) {
+      const b = c.a.getBoundingClientRect();
+      parts.push(r(b.left), r(b.top), r(b.width), r(b.height));
+    }
+    for (const m of masks || []) for (const x of m.rects) parts.push(r(x.left), r(x.top), r(x.width), r(x.height));
+    return parts.join(",");
+  }
+
+  async function shot(crops, anon) {
+    const res = await call("capture_shot", {
+      viewW: window.innerWidth,
+      anon,
+      crops: crops.map(({ x, y, w, h }) => ({ x, y, w, h })),
+    });
+    return res;
+  }
+
+  async function shootStep(keys, cur, P) {
+    for (let attempt = 0; attempt < 6 && !abort; attempt++) {
+      const p = plan(keys, cur);
+      if (!p || !p.crops.length) return null;
+      const arts = [...new Set(p.crops.map((c) => c.a))];
+      maskLayer.replaceChildren();
+      banner.style.display = "none";
+      await frames();
+      const sig0 = signature(p.crops);
+      const plain = await shot(p.crops, false);
+      if (signature(p.crops) !== sig0) {
+        await call("capture_drop", { id: plain.id });
+        await settle(150);
+        continue;
+      }
+      // Masked copy: measure, lay masks, check they are where they were
+      // measured, shoot, check again.
+      const masks = arts.flatMap((a) => masksFor(a, P));
+      const sig1 = signature(p.crops, masks);
+      drawMasks(masks);
+      await frames();
+      const still = () => signature(p.crops) === sig0 && signature(p.crops, remeasure(arts, P)) === sig1;
+      const masked = still() ? await shot(p.crops, true) : null;
+      const ok = masked && still();
+      maskLayer.replaceChildren();
+      if (!ok) {
+        await call("capture_drop", { id: plain.id });
+        if (masked) await call("capture_drop", { id: masked.id });
+        await settle(150);
+        continue;
+      }
+      return { next: p.next, full: plain.full || masked.full };
+    }
+    throw new Error("화면이 계속 움직여서 찍지 못했다");
+  }
+  const remeasure = (arts, P) => arts.flatMap((a) => masksFor(a, P));
+
+  async function run(a, b) {
     mode = "busy";
     abort = false;
     hover.style.display = "none";
     mark.style.display = "none";
     const back = window.scrollY;
     const [top, bottom] = a.y <= b.y ? [a, b] : [b, a];
-    const list = [];
-    const keys = new Set(); // collected
-    const above = new Set(); // seen above the first post: never collected
-    let lastKey = null;
-    let started = false;
-    let done = false;
-    let cut = false;
+    const P = newPeople();
+    let begun = false;
+    let finished = false;
+    window.dispatchEvent(new CustomEvent("paneful-shooting", { detail: true }));
+    host.style.pointerEvents = "auto"; // no hover highlight on posts while shooting
     try {
-      say("캡쳐: 게시물 모으는 중…");
-      if (!(await findArticle(top))) {
-        if (!abort) stop("첫 게시물을 다시 찾지 못했다. 다시 시도해라");
-        return;
-      }
+      say("캡쳐: 범위 확인 중…");
+      const { keys, cut } = await scan(top, bottom, P);
+      if (abort) return;
+      if (!keys.length) throw new Error("게시물을 읽지 못했다");
+
+      await call("capture_begin");
+      begun = true;
+      const firstArt = await findArticle(top);
+      if (!firstArt) throw new Error("첫 게시물을 다시 찾지 못했다");
+      let cur = { i: 0, off: 0 };
+      let full = false;
       let stuck = 0;
-      for (let step = 0; step < MAX_STEPS && !done && !abort; step++) {
-        const posts = articles()
-          .map(extract)
-          .filter(Boolean);
-        // Only what comes after the last collected post (when it is still
-        // in the DOM): never pick up posts above the range again.
-        const from = lastKey ? posts.findIndex((p) => p.key === lastKey) : -1;
-        for (const p of from >= 0 ? posts.slice(from + 1) : posts) {
-          const key = p.key;
-          if (!started) {
-            if (key !== top.key) {
-              above.add(key);
-              continue;
-            }
-            started = true;
-          }
-          if (above.has(key)) continue;
-          if (!keys.has(key)) {
-            keys.add(key);
-            lastKey = key;
-            delete p.key;
-            list.push(p);
-          }
-          if (key === bottom.key) {
-            done = true;
-            break;
-          }
-          if (list.length >= MAX_POSTS) {
-            done = cut = true;
-            break;
-          }
+      let col = firstArt.getBoundingClientRect();
+      for (let step = 0; step < MAX_STEPS && cur.i < keys.length && !abort && !full; step++) {
+        // Put the next part to take at the top of the screen.
+        const art = findByKey(keys[cur.i]);
+        if (art) {
+          col = art.getBoundingClientRect();
+          window.scrollBy({ top: Math.round(col.top + cur.off), behavior: "instant" });
+        } else {
+          window.scrollBy({ top: Math.round(window.innerHeight * 0.5), behavior: "instant" });
         }
-        if (done) break;
-        say(`캡쳐: 게시물 모으는 중… ${list.length}개`);
-        const before = window.scrollY;
-        window.scrollBy({ top: Math.round(window.innerHeight * 0.6), behavior: "instant" });
-        await settle();
-        if (Math.abs(window.scrollY - before) < 2) {
-          if (++stuck >= 3) break; // bottom of the page
-        } else stuck = 0;
+        await settle(180);
+        hideBars(col);
+        await frames();
+        const r = await shootStep(keys, cur, P);
+        say(`캡쳐: 찍는 중… ${Math.min(cur.i + 1, keys.length)}/${keys.length}`);
+        if (!r) {
+          if (++stuck >= 8) throw new Error("다음 게시물이 화면에 안 나온다");
+          continue;
+        }
+        stuck = 0;
+        cur = r.next;
+        full = r.full;
       }
       if (abort) return;
-      if (!list.length) return stop("게시물을 읽지 못했다");
-      const posts = list;
-      const t = window.__TAURI_INTERNALS__;
-      if (!t) return stop("앱과 연결이 안 됐다. 패널을 새로고침해라");
-      await t.invoke("capture_posts", { posts, cut: cut || !done });
+      await call("capture_finish", {
+        cssW: col.width,
+        people: P.ids.size,
+        cut: cut || cur.i < keys.length,
+        cancel: false,
+      });
+      finished = true;
       stop();
     } catch (e) {
-      stop("캡쳐 실패: " + String(e && e.message ? e.message : e).slice(0, 120));
+      stop("캡쳐 실패: " + String(e && e.message ? e.message : e).slice(0, 160));
     } finally {
+      if (begun && !finished) call("capture_finish", { cssW: 0, people: 0, cut: true, cancel: true }).catch(() => {});
+      showBars();
+      if (maskLayer) maskLayer.replaceChildren();
+      if (host) host.style.pointerEvents = "none";
+      window.dispatchEvent(new CustomEvent("paneful-shooting", { detail: false }));
       if (mode === "busy") mode = "idle";
       scrollTo(back);
     }

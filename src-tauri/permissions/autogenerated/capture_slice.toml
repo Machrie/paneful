@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-slice"
+description = "Enables the capture_slice command without any pre-configured scope."
+commands.allow = ["capture_slice"]
+
+[[permission]]
+identifier = "deny-capture-slice"
+description = "Denies the capture_slice command without any pre-configured scope."
+commands.deny = ["capture_slice"]

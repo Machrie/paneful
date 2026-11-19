@@ -4,7 +4,7 @@
 // 2. catch the app's own shortcuts before x.com sees them
 // The panel capability only allows `panel_focused`, `shortcut`,
 // `panel_keys` (read the configured bindings) and, for capture.js,
-// `capture_posts`.
+// `capture_begin` / `capture_shot` / `capture_drop` / `capture_finish`.
 // Keep the key mapping in sync with ui/app.js.
 (() => {
   if (window.top !== window) return;
