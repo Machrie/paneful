@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "panel",
-  "description": "x.com panels: only the focus report, the app shortcuts (switch panel, show/hide top bar, ...), reading their key bindings, opening a pasted X link in this panel after asking and the post capture (screenshots of this panel only, then the preview). No core permissions, no account, layout or settings commands.",
+  "description": "x.com panels: only the focus report, their unread counts, the app shortcuts (switch panel, show/hide top bar, ...), reading their key bindings, opening a pasted X link in this panel after asking, sending an X link to another panel and the post capture (screenshots of this panel only, then the preview). No core permissions, no account, layout or settings commands.",
   "webviews": [
     "panel-*"
   ],
@@ -12,10 +12,12 @@
   },
   "permissions": [
     "allow-panel-focused",
+    "allow-panel-unread",
     "allow-shortcut",
     "allow-panel-keys",
     "allow-paste-link",
     "allow-open-link",
+    "allow-send-link",
     "allow-capture-begin",
     "allow-capture-shot",
     "allow-capture-drop",

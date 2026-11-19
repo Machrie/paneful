@@ -37,12 +37,16 @@ const ICONS = {
   eyeOff: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c5 0 9 4.5 10 7a13 13 0 0 1-2.9 3.9M6.6 6.6C4.3 8 2.6 10.2 2 12c1 2.5 5 7 10 7a9.6 9.6 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   gear: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  pencil: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>',
+  arrowLeft: '<svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>',
+  arrowRight: '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>',
   camera: '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg>',
 };
 function setIcon(el, name) {
   el.innerHTML = ICONS[name];
 }
 document.querySelectorAll("[data-icon]").forEach((el) => setIcon(el, el.dataset.icon));
+document.querySelectorAll(".modkey").forEach((el) => (el.textContent = MOD));
 // Button tooltips name the configured keys, so they follow the layout.
 const keyText = (id) => {
   const k = L && L.keys.find((v) => v.id === id);
@@ -62,6 +66,7 @@ function stripTitle() {
   const bar = keyText("bar");
   const help = keyText("help");
   stripEl.title = [
+    ...L.panels.filter((p) => unreadText(p)).map((p) => `${p.label}: ${unreadText(p)}`),
     L.update_notice && `새 버전 v${L.update_notice} 있음`,
     `클릭${bar ? ` 또는 ${bar}` : ""}: 상단 바 표시`,
     help && `${help}: 단축키`,
@@ -69,6 +74,13 @@ function stripTitle() {
     .filter(Boolean)
     .join(" · ");
 }
+
+// ---- unread counts (what X shows in each panel, see src-tauri/src/unread.rs)
+function unreadText(p) {
+  const u = p.unread || {};
+  return [u.n && `알림 ${u.n}`, u.dm && `쪽지 ${u.dm}`].filter(Boolean).join(" · ");
+}
+const pct = (z) => Math.round(z * 100);
 
 // ---- new version notice (top bar pill, strip mark, settings section)
 let updateShape = "";
@@ -150,6 +162,7 @@ function render() {
   stripEl.hidden = L.bar;
   overlayEl.hidden = !L.help;
   settingsEl.hidden = !L.settings;
+  memWatch(L.settings);
   if (!L.settings && rec) stopRec();
   document.documentElement.style.setProperty("--top", `${L.top}px`);
   const s = L.panels.map((p) => `${p.id}\u0000${p.label}\u0000${p.color}`).join("\u0001");
@@ -167,6 +180,7 @@ function render() {
   if (s !== shape) {
     shape = s;
     build();
+    buildPanels();
   }
   renderUpdate();
   place();
@@ -199,6 +213,18 @@ function build() {
     const key = document.createElement("span");
     key.className = "key";
     if (i < 9) key.textContent = `${MOD} ${i + 1}`;
+    // Unread badges (filled in by place()).
+    const bn = document.createElement("span");
+    bn.className = "badge";
+    bn.hidden = true;
+    const bdm = document.createElement("span");
+    bdm.className = "badge dm";
+    bdm.hidden = true;
+    // Zoom other than 100%: "90%", click = back to 100%.
+    const zoom = document.createElement("button");
+    zoom.className = "scale";
+    zoom.hidden = true;
+    zoom.onclick = () => invoke("shortcut", { action: "zoom_reset", index: i }).catch(showError);
 
     const normal = document.createElement("span");
     normal.className = "group";
@@ -212,6 +238,7 @@ function build() {
     });
     del.classList.add("danger");
     normal.append(
+      Object.assign(iconButton("pencil", "이름·순서 바꾸기 (설정)", () => toggleSettings()), { className: "icon to-settings" }),
       iconButton("reload", "새로고침", () => invoke("reload_panel", { id: p.id }).catch(showError)),
       del,
     );
@@ -235,7 +262,7 @@ function build() {
     yes.classList.add("danger");
     ask.append(msg, yes, pill("취소", cancel));
 
-    t.append(dot, name, key, normal, ask);
+    t.append(dot, name, bn, bdm, key, zoom, normal, ask);
     tabsEl.append(t);
 
     if (i < L.panels.length - 1) {
@@ -247,17 +274,43 @@ function build() {
   });
 }
 
+let unreadShape = "";
 function place() {
+  const us = L.panels.map(unreadText).join("\u0001");
+  if (us !== unreadShape) {
+    unreadShape = us;
+    stripTitle();
+  }
   const pad = 8; // #bar padding-left
+  // Zoomed: one panel fills the window, so tabs and strip segments share
+  // the width evenly (a click still switches which panel is shown).
+  const n = L.panels.length;
+  const tabW = L.zoom ? tabsEl.clientWidth / n : 0;
+  const segW = L.zoom ? (L.win_w - L.gap * (n - 1)) / n : 0;
+  divsEl.hidden = L.zoom;
   L.panels.forEach((p, i) => {
     const t = tabsEl.children[i];
-    t.style.left = `${p.rect.x - pad}px`;
-    t.style.width = `${p.rect.w}px`;
+    t.style.left = L.zoom ? `${i * tabW}px` : `${p.rect.x - pad}px`;
+    t.style.width = L.zoom ? `${tabW}px` : `${p.rect.w}px`;
     t.classList.toggle("active", p.active);
+    const u = p.unread || {};
+    const [bn, bdm] = t.querySelectorAll(".badge");
+    bn.hidden = !u.n;
+    bn.textContent = u.n || "";
+    bn.title = u.n ? `새 알림 ${u.n}` : "";
+    bdm.hidden = !u.dm;
+    bdm.textContent = u.dm ? `쪽지 ${u.dm}` : "";
+    bdm.title = u.dm ? `안 읽은 쪽지 ${u.dm}` : "";
+    const zb = t.querySelector(".scale");
+    const z = pct(p.zoom || 1);
+    zb.hidden = z === 100;
+    zb.textContent = `${z}%`;
+    zb.title = `이 패널 배율 ${z}% · 누르면 100%`;
     const seg = stripEl.children[i];
-    seg.style.left = `${p.rect.x}px`;
-    seg.style.width = `${p.rect.w}px`;
+    seg.style.left = L.zoom ? `${i * (segW + L.gap)}px` : `${p.rect.x}px`;
+    seg.style.width = L.zoom ? `${segW}px` : `${p.rect.w}px`;
     seg.classList.toggle("active", p.active);
+    seg.classList.toggle("unread", !!unreadText(p));
     const d = divsEl.children[i];
     if (d) {
       d.style.left = `${p.rect.x + p.rect.w}px`;
@@ -334,6 +387,8 @@ function startDrag(e, el, i) {
 // ---- shortcut overlay
 // Fixed: Ctrl/Cmd+V in a panel outside text fields (panel.js, paste_link).
 const PASTE_LABEL = "복사한 X 링크 열기 (입력창 밖)";
+// Fixed: Ctrl/Cmd + wheel in a panel (panel.js), same steps as the zoom keys.
+const WHEEL_LABEL = "패널 배율 키우기/줄이기 (휠)";
 const KEY_LABELS = {
   global: "창 숨기기/불러오기 (전역)",
   next: "다음 패널",
@@ -341,7 +396,12 @@ const KEY_LABELS = {
   bar: "상단 바 보이기/숨기기",
   help: "이 단축키 창",
   capture: "게시물 캡쳐 (첫 → 마지막 게시물 클릭)",
+  send: "다른 패널에서 열기 (마우스 아래 게시물)",
+  zoom: "패널 크게 보기 / 되돌리기",
   settings: "설정",
+  zoom_in: "패널 배율 키우기",
+  zoom_out: "패널 배율 줄이기",
+  zoom_reset: "패널 배율 100%",
 };
 // X's own shortcuts, only the ones that agree across several public lists
 // (X has no current official page for them). Work in the focused panel.
@@ -391,7 +451,7 @@ function fillKeys(dl, rows) {
 function buildKeys() {
   const dl = $("app-keys");
   dl.replaceChildren();
-  const rows = [[[MOD, "1–9"], "N번째 패널로 포커스"], [[MOD, "V"], PASTE_LABEL]];
+  const rows = [[[MOD, "1–9"], "N번째 패널로 포커스"], [[MOD, "V"], PASTE_LABEL], [[MOD, "휠"], WHEEL_LABEL]];
   for (const k of L.keys) if (k.caps.length) rows.push([k.caps, KEY_LABELS[k.id]]);
   fillKeys(dl, rows);
   if (L.hotkey.length) {
@@ -469,6 +529,7 @@ function buildSettings() {
   for (const [label, keys] of [
     ["N번째 패널로 포커스", [MOD, "1–9"]],
     [PASTE_LABEL, [MOD, "V"]],
+    [WHEEL_LABEL, [MOD, "휠"]],
   ]) {
     const row = document.createElement("div");
     row.className = "keyrow";
@@ -484,6 +545,67 @@ function buildSettings() {
     row.append(name, caps, note);
     box.append(row);
   }
+}
+
+// ---- settings: panel names and order
+function buildPanels() {
+  const box = $("panel-rows");
+  box.replaceChildren();
+  const n = L.panels.length;
+  if (!n) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "패널 없음 (상단 바의 ＋ 계정으로 추가)";
+    box.append(p);
+    return;
+  }
+  L.panels.forEach((p, i) => {
+    const row = document.createElement("div");
+    row.className = "panelrow";
+    const num = document.createElement("span");
+    num.className = "pnum";
+    num.style.setProperty("--c", p.color);
+    num.textContent = i < 9 ? `${MOD} ${i + 1}` : "";
+    const input = document.createElement("input");
+    input.className = "pname";
+    input.type = "text";
+    input.value = p.label;
+    input.maxLength = 30;
+    input.spellcheck = false;
+    const save = async () => {
+      const v = input.value.trim();
+      if (v === p.label) return;
+      try {
+        await invoke("rename_account", { id: p.id, label: v });
+        settingsMsg(`이름 바뀜: ${v}`);
+      } catch (e) {
+        settingsMsg(e, true);
+        input.value = p.label;
+      }
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.isComposing) return; // Korean IME: Enter ends the syllable first
+      if (e.code === "Enter" || e.code === "NumpadEnter") {
+        e.preventDefault();
+        input.blur();
+      } else if (e.code === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        input.value = p.label;
+        input.blur();
+      }
+    });
+    input.addEventListener("blur", save);
+    const move = (to, icon, title) => {
+      const b = iconButton(icon, title, () =>
+        invoke("move_account", { id: p.id, to }).catch((e) => settingsMsg(e, true)),
+      );
+      b.disabled = to < 0 || to >= n;
+      return b;
+    };
+    row.append(num, input, move(i - 1, "arrowLeft", "왼쪽으로"), move(i + 1, "arrowRight", "오른쪽으로"));
+    box.append(row);
+  });
 }
 
 function kbds(keys) {
@@ -623,7 +745,7 @@ stripEl.onclick = toggleBar;
 // shortcuts keep working without clicking back into it. Runs after the
 // button handlers (bubble phase on document).
 document.addEventListener("click", (e) => {
-  if (e.target.closest("#help, #tray, #settings-btn, #capture")) return; // overlays keep focus here; tray hides the window; capture focuses the panel
+  if (e.target.closest("#help, #tray, #settings-btn, #capture, .to-settings")) return; // overlays keep focus here; tray hides the window; capture focuses the panel
   if (L && L.panels.length && !L.help && !L.settings && !L.capture) invoke("shortcut", { action: "refocus" }).catch(() => {});
 });
 
@@ -640,6 +762,8 @@ function keyOf(e) {
   if (mod && !e.shiftKey && !e.altKey && /^Digit[1-9]$/.test(e.code)) {
     return { action: "focus", index: Number(e.code.slice(5)) - 1 };
   }
+  // Esc in a settings text field (panel name) belongs to the field.
+  if (e.code === "Escape" && e.target instanceof HTMLInputElement && e.target.type === "text") return null;
   if (e.code === "Escape") {
     if (L.help) return { action: "help" };
     if (L.settings) return { action: "settings" };
@@ -652,11 +776,142 @@ window.addEventListener(
     const a = keyOf(e);
     if (!a) return;
     e.preventDefault();
-    if (e.repeat && ["bar", "help", "settings", "capture"].includes(a.action)) return;
+    if (e.repeat && ["bar", "help", "settings", "capture", "zoom", "send"].includes(a.action)) return;
     invoke("shortcut", a).catch(showError);
   },
   true,
 );
+
+// ---- panel memory (settings screen). Measured only while settings is open.
+let memTimer = null;
+let memBusy = false;
+const MEM_EVERY = 4000;
+function mb(b) {
+  if (b == null) return "—";
+  const m = b / (1024 * 1024);
+  return m >= 1024 ? `${(m / 1024).toFixed(2)} GB` : `${Math.round(m)} MB`;
+}
+function memWatch(open) {
+  if (open && !memTimer) {
+    measureMem();
+    memTimer = setInterval(measureMem, MEM_EVERY);
+  } else if (!open && memTimer) {
+    clearInterval(memTimer);
+    memTimer = null;
+  }
+}
+async function measureMem() {
+  if (memBusy) return;
+  memBusy = true;
+  try {
+    renderMem(await invoke("panel_memory"));
+  } catch (e) {
+    $("mem-err").textContent = `메모리를 못 잼: ${e}`;
+    $("mem-err").hidden = false;
+  } finally {
+    memBusy = false;
+  }
+}
+function timeOf(ms) {
+  return new Date(ms).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+}
+function memRow(name, bytes, { color, sub, top, total, reloadId } = {}) {
+  const row = document.createElement("div");
+  row.className = "memrow" + (total ? " total" : "");
+  const n = document.createElement("span");
+  n.className = "mname";
+  if (color) {
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    dot.style.setProperty("--c", color);
+    n.append(dot);
+  }
+  const t = document.createElement("span");
+  t.textContent = name;
+  n.append(t);
+  if (sub) {
+    const s = document.createElement("span");
+    s.className = "sub";
+    s.textContent = sub;
+    n.append(s);
+  }
+  const v = document.createElement("span");
+  v.className = "mval" + (top ? " top" : "");
+  v.textContent = mb(bytes);
+  row.append(n, v);
+  if (reloadId) {
+    row.append(
+      pill("새로고침", async (e) => {
+        e.target.disabled = true;
+        try {
+          await invoke("reload_panel", { id: reloadId });
+          settingsMsg(`'${name}' 새로고침함`);
+          setTimeout(measureMem, 1500);
+        } catch (err) {
+          settingsMsg(err, true);
+        } finally {
+          e.target.disabled = false;
+        }
+      }),
+    );
+  } else {
+    row.append(document.createElement("span"));
+  }
+  return row;
+}
+function renderMem(r) {
+  const box = $("mem-rows");
+  box.replaceChildren();
+  $("mem-hint").textContent = `${r.method || ""} 설정을 열어 두는 동안 ${MEM_EVERY / 1000}초마다 다시 잼.`.trim();
+  $("mem-err").hidden = !r.error;
+  $("mem-err").textContent = r.error ? `일부를 못 잼: ${r.error}` : "";
+  const known = r.panels.filter((p) => p.bytes != null).map((p) => p.bytes);
+  const max = known.length > 1 ? Math.max(...known) : null;
+  for (const p of r.panels) {
+    box.append(
+      memRow(p.label, p.bytes, {
+        color: p.color,
+        sub: p.bytes == null ? "프로세스를 못 찾음" : p.procs > 1 ? `프로세스 ${p.procs}개` : "",
+        top: max != null && p.bytes === max,
+        reloadId: p.id,
+      }),
+    );
+    if (p.last) {
+      const note = document.createElement("p");
+      note.className = "mnote warn";
+      note.textContent = `${timeOf(p.last.at)} ${p.last.text}`;
+      box.append(note);
+    }
+  }
+  if (!r.panels.length) {
+    const note = document.createElement("p");
+    note.className = "mnote";
+    note.textContent = "계정이 없음";
+    box.append(note);
+  }
+  if (r.shared != null) box.append(memRow("공용", r.shared, { sub: "WebView2 브라우저·GPU 등, 패널끼리 나눠 씀" }));
+  if (r.host != null) box.append(memRow("앱 화면", r.host, { sub: "상단 바·설정" }));
+  if (r.app != null) box.append(memRow("Paneful 본체", r.app));
+  if (r.total != null) box.append(memRow("합계", r.total, { total: true }));
+}
+
+// ---- dead panel recovery notices (health.rs)
+listen("panel-health", (ev) => {
+  const { id, text } = ev.payload;
+  showError(text);
+  // Bar hidden: the toast can't show, blink that panel's strip segment.
+  const i = L ? L.panels.findIndex((p) => p.id === id) : -1;
+  const seg = i >= 0 ? stripEl.children[i] : null;
+  if (seg) {
+    seg.classList.add("recovered");
+    seg.title = text;
+    setTimeout(() => {
+      seg.classList.remove("recovered");
+      seg.title = "";
+    }, 30000);
+  }
+  if (L && L.settings) measureMem();
+});
 
 listen("layout", (ev) => {
   L = ev.payload;

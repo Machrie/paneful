@@ -52,6 +52,11 @@
         <button id="settings-close" class="icon" data-icon="close" title="닫기 (Esc)"></button>
       </div>
       <section>
+        <h2>패널</h2>
+        <p class="hint">이름은 칸에서 고치고 Enter. 화살표로 순서 바꾸기 (<span class="modkey">Ctrl</span>+1~9는 화면 순서를 따라감).</p>
+        <div id="panel-rows"></div>
+      </section>
+      <section>
         <h2>저장 폴더</h2>
         <p class="hint">이미지·동영상 다운과 게시물 캡쳐 PNG가 저장되는 곳<span id="save-default"> · 지금은 기본 폴더</span></p>
         <div class="dirrow">
@@ -84,6 +89,12 @@
           <button id="up-skip" class="pill" hidden>이 버전 건너뛰기</button>
           <button id="up-check" class="pill">지금 확인</button>
         </div>
+      </section>
+      <section>
+        <h2>패널 메모리</h2>
+        <p class="hint" id="mem-hint">설정을 열어 두는 동안 몇 초마다 다시 잼.</p>
+        <div id="mem-rows"></div>
+        <p id="mem-err" class="hint warn" hidden></p>
       </section>
       <p id="settings-msg" class="foot" role="status"></p>
     </div>
