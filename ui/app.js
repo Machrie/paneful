@@ -154,6 +154,10 @@ $("rules-check").onclick = () => invoke("check_rules").catch((e) => settingsMsg(
 $("rules-auto").onchange = (e) =>
   invoke("set_rules_update", { on: e.target.checked }).catch((err) => settingsMsg(err, true));
 
+// ---- Unread badges on the tray / taskbar / Dock icons (settings section)
+$("badge-auto").onchange = (e) =>
+  invoke("set_unread_badge", { on: e.target.checked }).catch((err) => settingsMsg(err, true));
+
 function showError(e) {
   statusEl.textContent = String(e);
   statusEl.hidden = false;
@@ -209,6 +213,7 @@ function render() {
   }
   renderUpdate();
   renderRules();
+  $("badge-auto").checked = L.unread_badge !== false;
   place();
 }
 
