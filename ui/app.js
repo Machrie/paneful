@@ -150,6 +150,7 @@ function render() {
   stripEl.hidden = L.bar;
   overlayEl.hidden = !L.help;
   settingsEl.hidden = !L.settings;
+  memWatch(L.settings);
   if (!L.settings && rec) stopRec();
   document.documentElement.style.setProperty("--top", `${L.top}px`);
   const s = L.panels.map((p) => `${p.id}\u0000${p.label}\u0000${p.color}`).join("\u0001");
@@ -648,6 +649,137 @@ window.addEventListener(
   },
   true,
 );
+
+// ---- panel memory (settings screen). Measured only while settings is open.
+let memTimer = null;
+let memBusy = false;
+const MEM_EVERY = 4000;
+function mb(b) {
+  if (b == null) return "—";
+  const m = b / (1024 * 1024);
+  return m >= 1024 ? `${(m / 1024).toFixed(2)} GB` : `${Math.round(m)} MB`;
+}
+function memWatch(open) {
+  if (open && !memTimer) {
+    measureMem();
+    memTimer = setInterval(measureMem, MEM_EVERY);
+  } else if (!open && memTimer) {
+    clearInterval(memTimer);
+    memTimer = null;
+  }
+}
+async function measureMem() {
+  if (memBusy) return;
+  memBusy = true;
+  try {
+    renderMem(await invoke("panel_memory"));
+  } catch (e) {
+    $("mem-err").textContent = `메모리를 못 잼: ${e}`;
+    $("mem-err").hidden = false;
+  } finally {
+    memBusy = false;
+  }
+}
+function timeOf(ms) {
+  return new Date(ms).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+}
+function memRow(name, bytes, { color, sub, top, total, reloadId } = {}) {
+  const row = document.createElement("div");
+  row.className = "memrow" + (total ? " total" : "");
+  const n = document.createElement("span");
+  n.className = "mname";
+  if (color) {
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    dot.style.setProperty("--c", color);
+    n.append(dot);
+  }
+  const t = document.createElement("span");
+  t.textContent = name;
+  n.append(t);
+  if (sub) {
+    const s = document.createElement("span");
+    s.className = "sub";
+    s.textContent = sub;
+    n.append(s);
+  }
+  const v = document.createElement("span");
+  v.className = "mval" + (top ? " top" : "");
+  v.textContent = mb(bytes);
+  row.append(n, v);
+  if (reloadId) {
+    row.append(
+      pill("새로고침", async (e) => {
+        e.target.disabled = true;
+        try {
+          await invoke("reload_panel", { id: reloadId });
+          settingsMsg(`'${name}' 새로고침함`);
+          setTimeout(measureMem, 1500);
+        } catch (err) {
+          settingsMsg(err, true);
+        } finally {
+          e.target.disabled = false;
+        }
+      }),
+    );
+  } else {
+    row.append(document.createElement("span"));
+  }
+  return row;
+}
+function renderMem(r) {
+  const box = $("mem-rows");
+  box.replaceChildren();
+  $("mem-hint").textContent = `${r.method || ""} 설정을 열어 두는 동안 ${MEM_EVERY / 1000}초마다 다시 잼.`.trim();
+  $("mem-err").hidden = !r.error;
+  $("mem-err").textContent = r.error ? `일부를 못 잼: ${r.error}` : "";
+  const known = r.panels.filter((p) => p.bytes != null).map((p) => p.bytes);
+  const max = known.length > 1 ? Math.max(...known) : null;
+  for (const p of r.panels) {
+    box.append(
+      memRow(p.label, p.bytes, {
+        color: p.color,
+        sub: p.bytes == null ? "프로세스를 못 찾음" : p.procs > 1 ? `프로세스 ${p.procs}개` : "",
+        top: max != null && p.bytes === max,
+        reloadId: p.id,
+      }),
+    );
+    if (p.last) {
+      const note = document.createElement("p");
+      note.className = "mnote warn";
+      note.textContent = `${timeOf(p.last.at)} ${p.last.text}`;
+      box.append(note);
+    }
+  }
+  if (!r.panels.length) {
+    const note = document.createElement("p");
+    note.className = "mnote";
+    note.textContent = "계정이 없음";
+    box.append(note);
+  }
+  if (r.shared != null) box.append(memRow("공용", r.shared, { sub: "WebView2 브라우저·GPU 등, 패널끼리 나눠 씀" }));
+  if (r.host != null) box.append(memRow("앱 화면", r.host, { sub: "상단 바·설정" }));
+  if (r.app != null) box.append(memRow("Paneful 본체", r.app));
+  if (r.total != null) box.append(memRow("합계", r.total, { total: true }));
+}
+
+// ---- dead panel recovery notices (health.rs)
+listen("panel-health", (ev) => {
+  const { id, text } = ev.payload;
+  showError(text);
+  // Bar hidden: the toast can't show, blink that panel's strip segment.
+  const i = L ? L.panels.findIndex((p) => p.id === id) : -1;
+  const seg = i >= 0 ? stripEl.children[i] : null;
+  if (seg) {
+    seg.classList.add("recovered");
+    seg.title = text;
+    setTimeout(() => {
+      seg.classList.remove("recovered");
+      seg.title = "";
+    }, 30000);
+  }
+  if (L && L.settings) measureMem();
+});
 
 listen("layout", (ev) => {
   L = ev.payload;

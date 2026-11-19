@@ -9,7 +9,9 @@ mod keys;
 mod capture;
 mod snap;
 mod layout;
+mod health;
 mod media;
+mod memory;
 mod nav;
 mod settings;
 mod tray;
@@ -289,8 +291,36 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
 
     #[cfg(windows)]
     log_webview2_profile(&wv);
-    #[cfg(not(windows))]
-    let _ = wv;
+    health::watch(&wv);
+    Ok(())
+}
+
+/// Close a panel's webview and build it again in place (Windows: its
+/// WebView2 browser process is gone, so reload can't help).
+pub(crate) async fn recreate_panel<R: Runtime>(app: &AppHandle<R>, label: &str) -> Result<(), String> {
+    let window = app.get_window(MAIN).ok_or("no window")?;
+    let (acc, keys_json) = {
+        let s = app.state::<AppState>().settings.lock().unwrap().clone();
+        let acc = s.accounts.iter().find(|a| panel_label(a) == label).cloned().ok_or("no such panel")?;
+        (acc, bindings_json(&s))
+    };
+    if let Some(wv) = app.get_webview(label) {
+        let _ = wv.close();
+    }
+    // close() drops the label at once; wait a little in case it didn't.
+    for _ in 0..30 {
+        if app.get_webview(label).is_none() {
+            break;
+        }
+        let _ = tauri::async_runtime::spawn_blocking(|| std::thread::sleep(std::time::Duration::from_millis(100))).await;
+    }
+    if app.get_webview(label).is_some() {
+        return Err("old panel did not close".into());
+    }
+    log::info!("[{label}] rebuilding panel");
+    let rect = layout::Rect { x: 0.0, y: layout::TOP_STRIP, w: 10.0, h: 10.0 };
+    add_panel(&window, &acc, rect, &keys_json).map_err(|e| e.to_string())?;
+    relayout(app);
     Ok(())
 }
 
@@ -633,11 +663,24 @@ async fn open_link(state: State<'_, AppState>, webview: Webview, url: String) ->
     webview.navigate(url).map_err(|e| e.to_string())
 }
 
+/// 새로고침 (tab button, settings memory list). Also restarts the dead panel
+/// recovery count, and rebuilds the panel if its WebView2 is gone.
 #[tauri::command]
 async fn reload_panel(app: AppHandle, id: String) -> Result<(), String> {
     let label = format!("panel-{}", id.replace('-', ""));
+    let dead = health::is_dead(&label);
+    health::reset(&label);
+    if dead {
+        return recreate_panel(&app, &label).await;
+    }
     let wv = app.get_webview(&label).ok_or("no such panel")?;
     wv.reload().map_err(|e| e.to_string())
+}
+
+/// Settings screen: memory per panel (memory.rs).
+#[tauri::command]
+async fn panel_memory(app: AppHandle) -> memory::Report {
+    memory::measure(&app).await
 }
 
 #[tauri::command]
@@ -693,6 +736,7 @@ async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: String) 
         state.save(&snapshot);
         acc
     };
+    health::forget(&panel_label(&acc));
     if let Some(wv) = app.get_webview(&panel_label(&acc)) {
         wv.close().map_err(|e| e.to_string())?;
     }
@@ -929,7 +973,11 @@ async fn open_update(app: AppHandle) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Replaces tauri-runtime-wry's own unlimited silent reload (health.rs).
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(health::on_terminated);
+    builder
         .plugin(tauri_plugin_opener::init())
         // Folder picker in settings. Called from Rust only; no JS permission.
         .plugin(tauri_plugin_dialog::init())
@@ -1037,6 +1085,7 @@ pub fn run() {
             set_ratios,
             commit_layout,
             reload_panel,
+            panel_memory,
             add_account,
             remove_account,
             panel_focused,
