@@ -150,7 +150,7 @@ pub fn parse(url: &Url) -> Result<SaveRequest, &'static str> {
 
 /// `name.ext`, `name (2).ext`, ... : first one that doesn't exist yet,
 /// created atomically so two saves never share a file.
-fn create_unique(dir: &Path, file_name: &str) -> std::io::Result<(PathBuf, fs::File)> {
+pub(crate) fn create_unique(dir: &Path, file_name: &str) -> std::io::Result<(PathBuf, fs::File)> {
     let (stem, ext) = file_name.rsplit_once('.').unwrap_or((file_name, ""));
     for i in 1..=999 {
         let name = if i == 1 { file_name.to_string() } else { format!("{stem} ({i}).{ext}") };
@@ -164,7 +164,13 @@ fn create_unique(dir: &Path, file_name: &str) -> std::io::Result<(PathBuf, fs::F
     Err(std::io::Error::other("too many files with the same name"))
 }
 
-fn client() -> &'static reqwest::Client {
+/// Where "원본 저장" and post captures go: `<Downloads>/Paneful`. The one
+/// place to change when the folder becomes a setting.
+pub(crate) fn save_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    Ok(app.path().download_dir().map_err(|e| e.to_string())?.join("Paneful"))
+}
+
+pub(crate) fn client() -> &'static reqwest::Client {
     static C: OnceLock<reqwest::Client> = OnceLock::new();
     C.get_or_init(|| {
         reqwest::Client::builder()
@@ -255,9 +261,9 @@ pub fn handle<R: Runtime>(app: AppHandle<R>, label: String, url: Url) {
         return; // same file already downloading: ignore double clicks
     }
     tauri::async_runtime::spawn(async move {
-        let res = match app.path().download_dir() {
-            Ok(d) => download(d.join("Paneful"), &req).await,
-            Err(e) => Err(e.to_string()),
+        let res = match save_dir(&app) {
+            Ok(d) => download(d, &req).await,
+            Err(e) => Err(e),
         };
         in_flight().lock().unwrap().remove(&req.url);
         match res {

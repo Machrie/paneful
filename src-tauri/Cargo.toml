@@ -30,6 +30,11 @@ tauri-plugin-log = "2"
 # "원본 저장": cookie-less download of one twimg file. OS TLS (SChannel /
 # Security.framework), no extra crypto crates.
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "http2"] }
+# Post capture: copy the PNG to the clipboard (Rust side only, no JS API).
+tauri-plugin-clipboard-manager = "2"
+# Post capture: join the preview's PNG strips into one image. Already in
+# the tree through tauri.
+png = "0.18"
 # Show/hide toggle that works while another app has focus.
 tauri-plugin-global-shortcut = "2"
 

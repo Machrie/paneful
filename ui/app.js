@@ -31,6 +31,7 @@ const ICONS = {
   chevronUp: '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>',
   eyeOff: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c5 0 9 4.5 10 7a13 13 0 0 1-2.9 3.9M6.6 6.6C4.3 8 2.6 10.2 2 12c1 2.5 5 7 10 7a9.6 9.6 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  camera: '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg>',
 };
 function setIcon(el, name) {
   el.innerHTML = ICONS[name];
@@ -39,6 +40,7 @@ document.querySelectorAll("[data-icon]").forEach((el) => setIcon(el, el.dataset.
 $("help").title = `단축키 (${MOD}+/)`;
 $("hide").title = `상단 바 숨기기 (${MOD}+Shift+H)`;
 $("tray").title = "창을 트레이로 숨기기";
+$("capture").title = `게시물 캡쳐 (${MOD}+Shift+S): 첫 게시물, 마지막 게시물 순서로 클릭`;
 stripEl.title = `클릭 또는 ${MOD}+Shift+H: 상단 바 표시 · ${MOD}+/: 단축키`;
 
 function showError(e) {
@@ -252,6 +254,7 @@ const APP_KEYS = [
   [["Ctrl", "Tab"], "다음 패널"],
   [["Ctrl", "Shift", "Tab"], "이전 패널"],
   [[MOD, "Shift", "H"], "상단 바 보이기/숨기기"],
+  [[MOD, "Shift", "S"], "게시물 캡쳐 (첫 → 마지막 게시물 클릭)"],
   [[MOD, "/"], "이 단축키 창"],
 ];
 // X's own shortcuts, only the ones that agree across several public lists
@@ -327,6 +330,7 @@ overlayEl.addEventListener("click", (e) => {
   if (e.target === overlayEl) toggleHelp();
 });
 
+$("capture").onclick = () => invoke("shortcut", { action: "capture" }).catch(showError);
 $("add").onclick = () => invoke("add_account").catch(showError);
 $("tray").onclick = () => invoke("shortcut", { action: "tray" }).catch(showError);
 const toggleBar = () => invoke("shortcut", { action: "bar" }).catch(showError);
@@ -337,13 +341,14 @@ stripEl.onclick = toggleBar;
 // shortcuts keep working without clicking back into it. Runs after the
 // button handlers (bubble phase on document).
 document.addEventListener("click", (e) => {
-  if (e.target.closest("#help, #tray")) return; // overlay keeps focus here; tray hides the window
-  if (L && L.panels.length && !L.help) invoke("shortcut", { action: "refocus" }).catch(() => {});
+  if (e.target.closest("#help, #tray, #capture")) return; // overlay keeps focus here; tray hides the window; capture focuses the panel
+  if (L && L.panels.length && !L.help && !L.capture) invoke("shortcut", { action: "refocus" }).catch(() => {});
 });
 
 // Same mapping as src-tauri/src/panel.js, for when this UI has focus.
 // e.code, not e.key: stays the same under the Korean IME.
 function keyOf(e) {
+  if (L && L.capture) return null; // capture.js handles keys in the preview
   const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
   if (e.altKey) return null;
   if (mod && !e.shiftKey && /^Digit[1-9]$/.test(e.code)) {
@@ -351,6 +356,7 @@ function keyOf(e) {
   }
   if (e.ctrlKey && !e.metaKey && e.code === "Tab") return { action: e.shiftKey ? "prev" : "next" };
   if (mod && e.shiftKey && e.code === "KeyH") return { action: "bar" };
+  if (mod && e.shiftKey && e.code === "KeyS") return { action: "capture" };
   if (mod && !e.shiftKey && e.code === "Slash") return { action: "help" };
   if (L && L.help && e.code === "Escape") return { action: "help" };
   return null;
@@ -361,7 +367,7 @@ window.addEventListener(
     const a = keyOf(e);
     if (!a) return;
     e.preventDefault();
-    if (e.repeat && (a.action === "bar" || a.action === "help")) return;
+    if (e.repeat && (a.action === "bar" || a.action === "help" || a.action === "capture")) return;
     invoke("shortcut", a).catch(showError);
   },
   true,
