@@ -1,6 +1,7 @@
 // Paneful: post capture (x.com panels only).
 //
-// Ctrl/Cmd+Shift+S (or the top bar button) -> click the first post -> click
+// Ctrl/Cmd+Shift+S (mapped in panel.js / ui/app.js like the other app
+// shortcuts) or the top bar button -> click the first post -> click
 // the last post. X's timeline keeps only the posts near the screen in the
 // DOM, so after both ends are picked the script scrolls from the upper one
 // to the lower one itself and reads each post as it passes. Only what the
@@ -11,7 +12,6 @@
   if (window.top !== window || window.__panefulCapture) return;
   Object.defineProperty(window, "__panefulCapture", { value: true });
 
-  const mac = /Mac/.test(navigator.platform || navigator.userAgent);
   const MAX_POSTS = 150;
   const MAX_STEPS = 600;
   const STATUS_RE = /^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)/;
@@ -353,14 +353,13 @@
   let hovered = null;
   let abort = false;
 
-  const KEY_HINT = `${mac ? "⌘" : "Ctrl"}+Shift+S`;
 
   function startMode() {
     if (mode === "busy") return;
     if (mode !== "idle") return stop();
     mode = "start";
     first = null;
-    say(`캡쳐: 첫 게시물을 클릭 · 취소 Esc 또는 ${KEY_HINT}`);
+    say("캡쳐: 첫 게시물을 클릭 · 취소 Esc");
   }
 
   function stop(msg) {
@@ -440,13 +439,6 @@
   window.addEventListener(
     "keydown",
     (e) => {
-      const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
-      if (mod && e.shiftKey && !e.altKey && e.code === "KeyS") {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        if (!e.repeat) startMode();
-        return;
-      }
       if (mode === "idle") return;
       if (e.code === "Escape") {
         e.preventDefault();
@@ -461,7 +453,8 @@
     },
     true,
   );
-  // Top bar button / host shortcut (Rust dispatches this event).
+  // The capture shortcut (panel.js / ui/app.js -> Rust) and the top bar
+  // button both arrive as this event; pressing it again while picking cancels.
   window.addEventListener("paneful-capture", startMode);
 
   // ------------------------------------------------ auto scroll + collect

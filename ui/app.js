@@ -345,8 +345,7 @@ document.addEventListener("click", (e) => {
   if (L && L.panels.length && !L.help && !L.capture) invoke("shortcut", { action: "refocus" }).catch(() => {});
 });
 
-// Same mapping as src-tauri/src/panel.js (Ctrl/Cmd+Shift+S: capture.js there),
-// for when this UI has focus.
+// Same mapping as src-tauri/src/panel.js, for when this UI has focus.
 // e.code, not e.key: stays the same under the Korean IME.
 function keyOf(e) {
   if (L && L.capture) return null; // capture.js handles keys in the preview
@@ -368,7 +367,7 @@ window.addEventListener(
     const a = keyOf(e);
     if (!a) return;
     e.preventDefault();
-    if (e.repeat && (a.action === "bar" || a.action === "help")) return;
+    if (e.repeat && (a.action === "bar" || a.action === "help" || a.action === "capture")) return;
     invoke("shortcut", a).catch(showError);
   },
   true,

@@ -3,7 +3,7 @@
 // 1. tell the app when this panel gets keyboard focus (active-panel marker)
 // 2. catch the app's own shortcuts before x.com sees them
 // The panel capability allows `panel_focused`, `shortcut` and (for
-// capture.js, which also handles its own Ctrl/Cmd+Shift+S) `capture_posts`.
+// capture.js) `capture_posts`.
 // Ctrl/Cmd+/ is free on x.com (its own help is a bare `?`).
 // Keep the key mapping in sync with ui/app.js.
 (() => {
@@ -25,6 +25,7 @@
       return { action: e.shiftKey ? "prev" : "next" };
     }
     if (mod && e.shiftKey && e.code === "KeyH") return { action: "bar" };
+    if (mod && e.shiftKey && e.code === "KeyS") return { action: "capture" };
     if (mod && !e.shiftKey && e.code === "Slash") return { action: "help" };
     return null;
   };
@@ -37,7 +38,7 @@
       e.preventDefault();
       e.stopImmediatePropagation();
       // Holding a toggle key would flip it on and off; only the first press counts.
-      if (!e.repeat || !["bar", "help"].includes(a.action)) call("shortcut", a);
+      if (!e.repeat || !["bar", "help", "capture"].includes(a.action)) call("shortcut", a);
     },
     true,
   );

@@ -53,7 +53,9 @@
       const job = queue.shift();
       running++;
       invoke("capture_image", { url: job.url })
-        .then((buf) => createImageBitmap(new Blob([buf])))
+        // ArrayBuffer normally; a plain number array when Tauri's IPC has
+        // fallen back to postMessage.
+        .then((buf) => createImageBitmap(new Blob([Array.isArray(buf) ? new Uint8Array(buf) : buf])))
         .then(job.ok, () => job.ok(null))
         .finally(() => {
           running--;

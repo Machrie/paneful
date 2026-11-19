@@ -371,14 +371,24 @@ pub async fn capture_image(url: String) -> Result<tauri::ipc::Response, String> 
     Ok(tauri::ipc::Response::new(buf))
 }
 
+/// The bytes of a binary invoke. Normally the body is raw (custom protocol
+/// IPC). When the webview's custom protocol IPC has failed once, Tauri falls
+/// back to postMessage for the rest of the page's life and sends a
+/// Uint8Array as a JSON array of numbers instead (seen on Windows: "expected
+/// raw body"). Accept both.
+pub fn body_bytes(body: &InvokeBody) -> Result<Vec<u8>, String> {
+    match body {
+        InvokeBody::Raw(b) => Ok(b.clone()),
+        InvokeBody::Json(v) => serde_json::from_value::<Vec<u8>>(v.clone()).map_err(|_| "expected PNG bytes".to_string()),
+    }
+}
+
 /// Raw body = PNG strips (see `split_strips`). Headers: `x-action` = `save`,
 /// `copy` or `both`; `x-name` = file name stem. Returns the saved file name
 /// (empty when only copied).
 #[tauri::command]
 pub async fn capture_export<R: Runtime>(app: AppHandle<R>, request: tauri::ipc::Request<'_>) -> Result<String, String> {
-    let InvokeBody::Raw(body) = request.body() else {
-        return Err("expected raw body".into());
-    };
+    let body = body_bytes(request.body())?;
     let header = |k: &str| request.headers().get(k).and_then(|v| v.to_str().ok()).map(str::to_string);
     let action = header("x-action").unwrap_or_default();
     let (save, copy) = match action.as_str() {
@@ -388,7 +398,6 @@ pub async fn capture_export<R: Runtime>(app: AppHandle<R>, request: tauri::ipc::
         _ => return Err("bad action".into()),
     };
     let stem = file_stem(header("x-name").as_deref());
-    let body = body.clone();
 
     // Decoding / encoding a tall image takes a while: off the IPC thread.
     let (w, h, rgba) = tauri::async_runtime::spawn_blocking(move || {
@@ -404,7 +413,7 @@ pub async fn capture_export<R: Runtime>(app: AppHandle<R>, request: tauri::ipc::
         app.clipboard().write_image(&img).map_err(|e| format!("clipboard: {e}"))?;
     }
     if save {
-        let dir: PathBuf = app.path().download_dir().map_err(|e| e.to_string())?.join("Paneful");
+        let dir: PathBuf = media::save_dir(&app)?;
         let path = tauri::async_runtime::spawn_blocking(move || -> Result<PathBuf, String> {
             let png = encode_png(w, h, &rgba)?;
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -492,6 +501,14 @@ mod tests {
         assert!(stitch(&[&a, &c]).is_err());
         assert!(split_strips(&body[..body.len() - 1]).is_err());
         assert!(split_strips(&0u32.to_le_bytes()).is_err());
+    }
+
+    #[test]
+    fn bodies() {
+        assert_eq!(body_bytes(&InvokeBody::Raw(vec![1, 2, 255])).unwrap(), vec![1, 2, 255]);
+        assert_eq!(body_bytes(&InvokeBody::Json(serde_json::json!([1, 2, 255]))).unwrap(), vec![1, 2, 255]);
+        assert!(body_bytes(&InvokeBody::Json(serde_json::json!([1, 256]))).is_err());
+        assert!(body_bytes(&InvokeBody::Json(serde_json::json!({"a": 1}))).is_err());
     }
 
     #[test]
