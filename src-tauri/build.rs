@@ -11,6 +11,7 @@ fn main() {
             "add_account",
             "remove_account",
             "panel_focused",
+            "panel_unread",
             "shortcut",
             "panel_keys",
             "paste_link",

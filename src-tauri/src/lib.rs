@@ -13,7 +13,9 @@ mod media;
 mod nav;
 mod settings;
 mod tray;
+mod unread;
 mod update;
+mod zoom;
 
 use serde::Serialize;
 use settings::{Account, Persist, Settings, COLORS};
@@ -54,6 +56,9 @@ pub(crate) struct AppState {
     hotkey_error: Mutex<Option<String>>,
     /// Last new version check (update.rs).
     update: Mutex<update::Status>,
+    /// Unread counts per account as its panel shows them (unread.rs).
+    /// Only accounts with something unread are in here. Not persisted.
+    unread: Mutex<BTreeMap<Uuid, unread::Unread>>,
     path: PathBuf,
     persist: Persist,
 }
@@ -81,6 +86,10 @@ struct PanelView {
     color: String,
     active: bool,
     rect: layout::Rect,
+    /// Page zoom (1.0 = 100%).
+    zoom: f64,
+    /// Unread counts X shows in this panel.
+    unread: unread::Unread,
 }
 
 #[derive(Serialize, Clone)]
@@ -159,6 +168,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
     let hotkey_error = state.hotkey_error.lock().unwrap().clone();
     let capture = *state.capture.lock().unwrap();
     let up = state.update.lock().unwrap().clone();
+    let unread = state.unread.lock().unwrap().clone();
     let (w, h) = logical_size(&window);
     let top = top_of(&s);
     let rects = layout::panels(w, h, top, &s.ratios);
@@ -186,6 +196,8 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
             color: acc.color.clone(),
             active: active == Some(acc.id),
             rect: *r,
+            zoom: acc.zoom,
+            unread: unread.get(&acc.id).cloned().unwrap_or_default(),
         });
     }
     let payload = LayoutPayload {
@@ -232,6 +244,15 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
         .initialization_script(media::SCRIPT)
         .initialization_script(capture::SCRIPT)
         .initialization_script(LINKS_JS)
+        // Zoom again after each page load: WebView2 may drop the zoom factor
+        // when a page loads (Chromium keeps zoom per site). Same value again
+        // is a no-op.
+        .on_page_load(|wv, _| {
+            let z = panel_zoom(&wv.app_handle().state::<AppState>(), wv.label());
+            if let Some(z) = z.filter(|z| *z != 1.0) {
+                let _ = wv.set_zoom(z);
+            }
+        })
         .on_navigation(move |url| match nav::decide(url) {
             nav::Decision::Allow => true,
             nav::Decision::OpenExternal => {
@@ -287,11 +308,43 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
         LogicalSize::new(rect.w, rect.h),
     )?;
 
+    if acc.zoom != 1.0 {
+        let _ = wv.set_zoom(acc.zoom);
+    }
     #[cfg(windows)]
     log_webview2_profile(&wv);
-    #[cfg(not(windows))]
-    let _ = wv;
     Ok(())
+}
+
+/// Zoom of the panel with this webview label (None: no such panel).
+/// Lock held only for the lookup.
+pub(crate) fn panel_zoom(state: &AppState, label: &str) -> Option<f64> {
+    let s = state.settings.lock().unwrap();
+    s.accounts.iter().find(|a| panel_label(a) == label).map(|a| a.zoom)
+}
+
+/// Account of the panel with this webview label.
+fn panel_id(state: &AppState, label: &str) -> Option<Uuid> {
+    let s = state.settings.lock().unwrap();
+    s.accounts.iter().find(|a| panel_label(a) == label).map(|a| a.id)
+}
+
+/// (account label, counts) of every panel with something unread, in panel
+/// order, for the tray. Locks are let go before returning.
+pub(crate) fn unread_lines(state: &AppState) -> Vec<(String, unread::Unread)> {
+    let accounts: Vec<(Uuid, String)> = state
+        .settings
+        .lock()
+        .unwrap()
+        .accounts
+        .iter()
+        .map(|a| (a.id, a.label.clone()))
+        .collect();
+    let unread = state.unread.lock().unwrap().clone();
+    accounts
+        .into_iter()
+        .filter_map(|(id, label)| unread.get(&id).map(|u| (label, u.clone())))
+        .collect()
 }
 
 /// Hand an off-list address to the system browser. paneful.log keeps each
@@ -352,7 +405,7 @@ fn purge_pending_profiles(app: &tauri::App, s: &mut Settings) {
 
 // ---------------------------------------------------------------- commands
 // The host webview may call these (capabilities/host.json); x.com panels only
-// panel_focused, shortcut, panel_keys, paste_link, open_link and capture_begin/shot/drop/finish
+// panel_focused, panel_unread, shortcut, panel_keys, paste_link, open_link and capture_begin/shot/drop/finish
 // (capabilities/panel.json). Commands are async
 // because add_child from a sync command deadlocks on WebView2.
 
@@ -415,19 +468,30 @@ fn refocus_active<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// The calling panel's unread counts changed (panel.js reads them off the
+/// page; see unread.rs). The caller is the panel by its webview label.
+#[tauri::command]
+async fn panel_unread(app: AppHandle, state: State<'_, AppState>, webview: Webview, n: String, dm: String) -> Result<(), String> {
+    let id = panel_id(&state, webview.label()).ok_or("not a panel")?;
+    let u = unread::Unread::new(&n, &dm);
+    let changed = {
+        let mut m = state.unread.lock().unwrap();
+        let old = if u.is_empty() { m.remove(&id) } else { m.insert(id, u.clone()) };
+        old.unwrap_or_default() != u
+    };
+    if changed {
+        relayout(&app);
+        tray::refresh(&app);
+    }
+    Ok(())
+}
+
 /// Panel webview got keyboard focus (click, Tab, or focus_account).
 /// Called from PANEL_JS; the caller is identified by its webview label,
 /// not by anything the page sends.
 #[tauri::command]
 async fn panel_focused(app: AppHandle, state: State<'_, AppState>, webview: Webview) -> Result<(), String> {
-    let id = {
-        let s = state.settings.lock().unwrap();
-        s.accounts
-            .iter()
-            .find(|a| panel_label(a) == webview.label())
-            .map(|a| a.id)
-            .ok_or("not a panel")?
-    };
+    let id = panel_id(&state, webview.label()).ok_or("not a panel")?;
     let changed = state.active.lock().unwrap().replace(id) != Some(id);
     if changed {
         relayout(&app);
@@ -446,17 +510,22 @@ async fn panel_focused(app: AppHandle, state: State<'_, AppState>, webview: Webv
 /// - `tray`: hide the window to the tray (top bar button)
 /// - `capture`: Ctrl/Cmd+Shift+S from the host UI or the top bar button:
 ///   start picking posts in the active panel (capture.js)
+/// - `zoom_in` / `zoom_out` / `zoom_reset`: Ctrl/Cmd + = / - / 0, page zoom
+///   of the panel the key was pressed in; from the host UI the panel at
+///   `index` (tab button) or the active one
 #[tauri::command]
 async fn shortcut(
     app: AppHandle,
     state: State<'_, AppState>,
+    webview: Webview,
     action: String,
     index: Option<usize>,
 ) -> Result<(), String> {
     // Paired start/end lines: after a hang, a start without its end in
     // paneful.log names the shortcut that got stuck.
     log::info!("shortcut {action} {index:?}: start");
-    let r = run_shortcut(&app, &state, &action, index);
+    let caller = panel_id(&state, webview.label());
+    let r = run_shortcut(&app, &state, &action, index, caller);
     log::info!("shortcut {action}: end");
     r
 }
@@ -493,7 +562,43 @@ pub(crate) fn open_settings<R: Runtime>(app: &AppHandle<R>) {
     set_overlay(app, &state, false, true);
 }
 
-fn run_shortcut(app: &AppHandle, state: &AppState, action: &str, index: Option<usize>) -> Result<(), String> {
+/// Zoom one panel a step in (`dir` 1), out (-1) or back to 100% (0), save
+/// it, and show the new value in the panel for a moment.
+fn zoom_panel<R: Runtime>(app: &AppHandle<R>, state: &AppState, id: Uuid, dir: i32) {
+    let label = format!("panel-{}", id.simple());
+    let (z, snapshot) = {
+        let mut s = state.settings.lock().unwrap();
+        let Some(acc) = s.accounts.iter_mut().find(|a| a.id == id) else { return };
+        let z = zoom::step(acc.zoom, dir);
+        let changed = acc.zoom != z;
+        acc.zoom = z;
+        (z, changed.then(|| s.clone()))
+    };
+    if let Some(snap) = &snapshot {
+        state.save(snap);
+    }
+    if let Some(wv) = app.get_webview(&label) {
+        if snapshot.is_some() {
+            let _ = wv.set_zoom(z);
+        }
+        // Shown even at the limit, so a key that "does nothing" says why.
+        let _ = wv.eval(format!(
+            "window.dispatchEvent(new CustomEvent('paneful-zoom',{{detail:{}}}))",
+            zoom::percent(z)
+        ));
+    }
+    if snapshot.is_some() {
+        relayout(app);
+    }
+}
+
+fn run_shortcut(
+    app: &AppHandle,
+    state: &AppState,
+    action: &str,
+    index: Option<usize>,
+    caller: Option<Uuid>,
+) -> Result<(), String> {
     let app = app.clone();
     // Capture preview open: the host UI handles its own keys; any app
     // shortcut that still gets here closes it first.
@@ -568,6 +673,28 @@ fn run_shortcut(app: &AppHandle, state: &AppState, action: &str, index: Option<u
         return Ok(());
     }
     let active = *state.active.lock().unwrap();
+    let dir = match action {
+        "zoom_in" => Some(1),
+        "zoom_out" => Some(-1),
+        "zoom_reset" => Some(0),
+        _ => None,
+    };
+    if let Some(dir) = dir {
+        // A panel zooms itself; the host UI names a tab or means the active one.
+        let target = caller
+            .or_else(|| index.and_then(|i| ids.get(i).copied()))
+            .or(active.filter(|a| ids.contains(a)))
+            .or(ids.first().copied());
+        if let Some(id) = target {
+            zoom_panel(&app, state, id, dir);
+            // From the host UI (tab button, key with the bar focused): focus
+            // goes to that panel, as for any other click up there.
+            if caller.is_none() {
+                focus_account(&app, id);
+            }
+        }
+        return Ok(());
+    }
     let cur = active.and_then(|a| ids.iter().position(|i| *i == a));
     let n = ids.len();
     let target = match action {
@@ -682,6 +809,7 @@ async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: String) 
             *active = None;
         }
         drop(active);
+        state.unread.lock().unwrap().remove(&acc.id);
         s.ratios = layout::clamp_ratios(w, &layout::with_removed(&s.ratios, idx));
         s.fix_ratios();
         #[cfg(windows)]
@@ -697,6 +825,7 @@ async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: String) 
         wv.close().map_err(|e| e.to_string())?;
     }
     relayout(&app);
+    tray::refresh(&app);
 
     // macOS: try to drop the WKWebsiteDataStore now; whatever fails stays in
     // pending_store_deletes and is retried on next start.
@@ -798,7 +927,7 @@ async fn set_key(app: AppHandle, state: State<'_, AppState>, id: String, accel: 
             s.clone()
         };
         state.save(&snapshot);
-        tray::set_tooltip(&app, effective.as_deref());
+        tray::refresh(&app);
     } else {
         let snapshot = {
             let mut s = state.settings.lock().unwrap();
@@ -972,6 +1101,7 @@ pub fn run() {
                 hotkey_error: Mutex::new(hotkey_error),
                 capture: Mutex::new(false),
                 update: Mutex::new(update::Status::default()),
+                unread: Mutex::new(BTreeMap::new()),
                 path,
                 persist,
             };
@@ -1040,6 +1170,7 @@ pub fn run() {
             add_account,
             remove_account,
             panel_focused,
+            panel_unread,
             shortcut,
             panel_keys,
             paste_link,

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-panel-unread"
+description = "Enables the panel_unread command without any pre-configured scope."
+commands.allow = ["panel_unread"]
+
+[[permission]]
+identifier = "deny-panel-unread"
+description = "Denies the panel_unread command without any pre-configured scope."
+commands.deny = ["panel_unread"]

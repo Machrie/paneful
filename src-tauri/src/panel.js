@@ -1,11 +1,15 @@
 // Injected into every x.com panel (main frame only) before x.com's own
-// scripts. Three jobs, nothing else:
+// scripts. Four jobs, nothing else:
 // 1. tell the app when this panel gets keyboard focus (active-panel marker)
-// 2. catch the app's own shortcuts before x.com sees them
+// 2. catch the app's own shortcuts before x.com sees them (and Ctrl/Cmd +
+//    wheel for zoom)
 // 3. Ctrl/Cmd+V outside a text field: ask Rust for the X link on the
 //    clipboard (Rust reads the clipboard, not the page), ask the user, then
 //    open it in this panel
-// The panel capability only allows `panel_focused`, `shortcut`,
+// 4. read the unread counts X already shows (badges on the 알림 / 쪽지
+//    links, or "(3)" in the title) and tell the app when they change.
+//    Nothing is requested from X for this.
+// The panel capability only allows `panel_focused`, `panel_unread`, `shortcut`,
 // `panel_keys` (read the configured bindings), `paste_link`, `open_link` and, for capture.js,
 // `capture_begin` / `capture_shot` / `capture_drop` / `capture_finish`.
 // Keep the key mapping in sync with ui/app.js.
@@ -42,6 +46,28 @@
     return null;
   };
 
+  const capturing = () => !!window[Symbol.for("paneful.capturing")];
+  // Ctrl/Cmd + wheel (and a trackpad pinch, which arrives as Ctrl + wheel):
+  // the same zoom steps as the keys. One step per notch, at most one per
+  // 80 ms, so a fast trackpad doesn't run through every level at once.
+  let wheelSum = 0;
+  let wheelAt = 0;
+  window.addEventListener(
+    "wheel",
+    (e) => {
+      if (!(e.ctrlKey || (mac && e.metaKey))) return;
+      e.preventDefault();
+      if (capturing()) return;
+      wheelSum += e.deltaMode === 0 ? e.deltaY : e.deltaY * 40;
+      const now = Date.now();
+      if (Math.abs(wheelSum) < 40 || now - wheelAt < 80) return;
+      call("shortcut", { action: wheelSum < 0 ? "zoom_in" : "zoom_out" }).catch(() => {});
+      wheelSum = 0;
+      wheelAt = now;
+    },
+    { capture: true, passive: false },
+  );
+
   window.addEventListener(
     "keydown",
     (e) => {
@@ -49,6 +75,8 @@
       if (!a) return;
       e.preventDefault();
       e.stopImmediatePropagation();
+      // Zoom while picking posts for a capture would change the crop sizes.
+      if (a.action.startsWith("zoom_") && capturing()) return;
       // Holding a toggle key would flip it on and off; only the first press counts.
       if (!e.repeat || !["bar", "help", "settings", "capture"].includes(a.action)) call("shortcut", a).catch(() => {});
     },
@@ -125,7 +153,7 @@
     clearTimeout(msgTimer);
     if (ui) ui.host.remove();
   };
-  const say = (msg) => {
+  const say = (msg, ms) => {
     ensureUi();
     pending = null;
     ui.text.textContent = msg;
@@ -134,8 +162,14 @@
     place(false);
     show();
     clearTimeout(msgTimer);
-    msgTimer = setTimeout(hide, 3000);
+    msgTimer = setTimeout(hide, ms || 3000);
   };
+  // The app changed this panel's zoom: show the new value for a moment
+  // (not over an open "go there?" question).
+  window.addEventListener("paneful-zoom", (e) => {
+    const p = Number(e.detail);
+    if (!pending && p > 0) say(`배율 ${p}%`, 1200);
+  });
   const ask = (url) => {
     ensureUi();
     pending = url;
@@ -190,6 +224,47 @@
     },
     true,
   );
+
+  // ---- unread counts
+  // Badge = a leaf element on the nav link whose text is just a number
+  // ("3", "20+"). The nav link is the left sidebar on wide panels and the
+  // bottom bar on narrow ones. No link (e.g. a page without the nav): the
+  // "(3)" X puts in front of the title, for 알림 only.
+  const BADGE = /^\d{1,4}\+?$/;
+  const badgeIn = (a) => {
+    if (!a) return "";
+    for (const el of a.querySelectorAll("div, span")) {
+      if (el.childElementCount) continue;
+      const t = (el.textContent || "").trim();
+      if (BADGE.test(t)) return t;
+    }
+    return "";
+  };
+  const readUnread = () => {
+    const nl = document.querySelector('a[data-testid="AppTabBar_Notifications_Link"], a[href="/notifications"][role="link"]');
+    const ml = document.querySelector(
+      'a[data-testid="AppTabBar_DirectMessage_Link"], a[href="/messages"][role="link"], a[href^="/i/chat"][role="link"]',
+    );
+    let n = badgeIn(nl);
+    if (!nl) {
+      const m = /^\((\d{1,4}\+?)\)\s/.exec(document.title || "");
+      n = m ? m[1] : "";
+    }
+    return { n, dm: badgeIn(ml) };
+  };
+  let sent = "";
+  const checkUnread = () => {
+    const u = readUnread();
+    const key = u.n + "|" + u.dm;
+    if (key === sent) return;
+    sent = key;
+    call("panel_unread", u).catch(() => (sent = "")); // retried on the next tick
+  };
+  // Cheap (two selectors) and only sends on change. While the window is
+  // hidden the browser may run this less often; X's own badge updates are
+  // throttled the same way.
+  setInterval(checkUnread, 2000);
+  document.addEventListener("DOMContentLoaded", checkUnread);
 
   window.addEventListener("focus", () => call("panel_focused").catch(() => {}));
   const ready = () => {

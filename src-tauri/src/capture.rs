@@ -292,7 +292,11 @@ pub async fn capture_finish(
     let (Some(anon), Some(plain)) = (anon, plain) else {
         return Err("nothing captured".into());
     };
-    let preview = Preview { w: anon.w, h: anon.h, css_w, people, cut };
+    // css_w is in the panel's CSS px; a zoomed panel's are bigger or
+    // smaller than the preview's (100%) ones. The crops themselves don't
+    // care: they are cut at screenshot px / innerWidth, both zoomed alike.
+    let zoom = crate::panel_zoom(&state, webview.label()).unwrap_or(1.0);
+    let preview = Preview { w: anon.w, h: anon.h, css_w: css_w * zoom, people, cut };
     log::info!("capture: {}x{} from {}", anon.w, anon.h, webview.label());
     *done().lock().unwrap() = Some(Done { anon, plain });
 
