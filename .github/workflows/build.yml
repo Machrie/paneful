@@ -1,11 +1,18 @@
 name: build
 
 on:
+  # No build on pushes to main: PRs are built, and a v* tag builds the release.
   push:
-    branches: [main]
     tags: ['v*']
   pull_request:
+  # Actions tab > build > Run workflow. Fill "release" (e.g. v0.0.1) to build
+  # and publish that release from the chosen branch without pushing a tag.
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Release tag to create, e.g. v0.0.1 (leave empty to only build)"
+        required: false
+        default: ""
 
 concurrency:
   group: build-${{ github.ref }}
@@ -45,11 +52,28 @@ jobs:
           name: paneful-${{ matrix.os }}
           path: ${{ matrix.artifact }}
           if-no-files-found: error
+      # Windows portable: the bare exe (UI is embedded, WebView2 loader is
+      # linked statically) zipped up. Needs the WebView2 runtime on the PC.
+      - name: portable zip
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ver = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force portable | Out-Null
+          Copy-Item target/release/paneful.exe portable/Paneful.exe
+          Copy-Item LICENSE portable/LICENSE.txt
+          Compress-Archive -Path portable/* -DestinationPath "Paneful_${ver}_x64-portable.zip"
+      - if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: paneful-windows-portable
+          path: Paneful_*_x64-portable.zip
+          if-no-files-found: error
 
   # Tag push (v*): attach the installers to a public GitHub Release so people
   # can download them without a GitHub login or an expiry date.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != '')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -62,9 +86,18 @@ jobs:
       - name: create release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release || github.ref_name }}
         run: |
           ls -l dist
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          case "$TAG" in v[0-9]*) ;; *) echo "tag must look like v0.0.1: $TAG"; exit 1;; esac
+          # File names carry tauri.conf.json's version; refuse a mismatched tag.
+          if ! ls dist | grep -qF "_${TAG#v}_"; then
+            echo "no installer named for ${TAG#v}; bump src-tauri/tauri.conf.json version first"; exit 1
+          fi
+          # On a tag push the tag exists already; on a manual run this creates
+          # it at the built commit.
+          gh release create "$TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Paneful $GITHUB_REF_NAME" \
+            --target "$GITHUB_SHA" \
+            --title "Paneful $TAG" \
             --generate-notes

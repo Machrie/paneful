@@ -8,7 +8,7 @@
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
-    tray::{TrayIconBuilder, TrayIconEvent},
+    tray::TrayIconBuilder,
     AppHandle, Manager, Runtime,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
@@ -61,7 +61,33 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) {
     crate::refocus_active(app);
 }
 
+/// Runs `toggle` on a worker thread instead of inside the tray / hotkey
+/// callback. Those callbacks run on the main thread, where every window and
+/// webview call (show, focus, WebView2 MoveFocus, relayout) executes nested
+/// inside the callback. From a worker the same calls are queued to the event
+/// loop and run one by one, the way the async commands already do it.
+pub fn toggle_later<R: Runtime>(app: &AppHandle<R>, how: Toggle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // One toggle at a time, so fast repeats don't both read "visible".
+        // Only worker threads take this lock, never the main thread.
+        static BUSY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _busy = BUSY.lock().unwrap_or_else(|e| e.into_inner());
+        toggle(&app, how)
+    });
+}
+
 pub fn toggle<R: Runtime>(app: &AppHandle<R>, how: Toggle) {
+    let label = match how {
+        Toggle::Shortcut => "hotkey",
+        Toggle::Tray => "tray",
+    };
+    log::info!("toggle {label}: start");
+    toggle_inner(app, how);
+    log::info!("toggle {label}: end");
+}
+
+fn toggle_inner<R: Runtime>(app: &AppHandle<R>, how: Toggle) {
     let Some(w) = app.get_window(MAIN) else { return };
     let shown = w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false);
     let in_front = match how {
@@ -91,7 +117,7 @@ pub fn create<R: Runtime>(app: &AppHandle<R>, hotkey: Option<&str>) -> tauri::Re
         .tooltip(tooltip)
         .menu(&menu)
         .on_menu_event(|app, e| match e.id().as_ref() {
-            "toggle" => toggle(app, Toggle::Tray),
+            "toggle" => toggle_later(app, Toggle::Tray),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -99,13 +125,13 @@ pub fn create<R: Runtime>(app: &AppHandle<R>, hotkey: Option<&str>) -> tauri::Re
             // Windows: left click toggles, right click opens the menu.
             // macOS: any click opens the menu (menu bar convention).
             #[cfg(not(target_os = "macos"))]
-            if let TrayIconEvent::Click {
+            if let tauri::tray::TrayIconEvent::Click {
                 button: tauri::tray::MouseButton::Left,
                 button_state: tauri::tray::MouseButtonState::Up,
                 ..
             } = e
             {
-                toggle(tray.app_handle(), Toggle::Tray);
+                toggle_later(tray.app_handle(), Toggle::Tray);
             }
             #[cfg(target_os = "macos")]
             let _ = (tray, e);
@@ -124,7 +150,7 @@ pub fn create<R: Runtime>(app: &AppHandle<R>, hotkey: Option<&str>) -> tauri::Re
 /// Global shortcut handler (registered with the plugin builder).
 pub fn on_shortcut<R: Runtime>(app: &AppHandle<R>, _s: &Shortcut, e: ShortcutEvent) {
     if e.state == ShortcutState::Pressed {
-        toggle(app, Toggle::Shortcut);
+        toggle_later(app, Toggle::Shortcut);
     }
 }
 
