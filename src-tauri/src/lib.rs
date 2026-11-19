@@ -315,7 +315,7 @@ fn purge_pending_profiles(app: &tauri::App, s: &mut Settings) {
 
 // ---------------------------------------------------------------- commands
 // The host webview may call these (capabilities/host.json); x.com panels only
-// panel_focused, shortcut, panel_keys and capture_begin/shot/drop/finish
+// panel_focused, shortcut, panel_keys, paste_link and capture_begin/shot/drop/finish
 // (capabilities/panel.json). Commands are async
 // because add_child from a sync command deadlocks on WebView2.
 
@@ -545,6 +545,38 @@ fn run_shortcut(app: &AppHandle, state: &AppState, action: &str, index: Option<u
     };
     focus_account(&app, ids[target]);
     Ok(())
+}
+
+/// Ctrl/Cmd+V in a panel outside any text field (panel.js): if the
+/// clipboard holds one X link, open it in that panel. The caller is the
+/// panel by its webview label; the page sends nothing. Ok(None): opened or
+/// nothing to do. Ok(Some(msg)): panel.js shows `msg` briefly.
+/// No lock is held while touching the clipboard or the webview.
+#[tauri::command]
+async fn paste_link(app: AppHandle, state: State<'_, AppState>, webview: Webview) -> Result<Option<String>, String> {
+    let is_panel = {
+        let s = state.settings.lock().unwrap();
+        s.accounts.iter().any(|a| panel_label(a) == webview.label())
+    };
+    if !is_panel {
+        return Err("not a panel".into());
+    }
+    // Image or empty clipboard: read_text fails, nothing to do.
+    let Ok(text) = tauri_plugin_clipboard_manager::ClipboardExt::clipboard(&app).read_text() else {
+        return Ok(None);
+    };
+    match nav::x_link(&text) {
+        Ok(url) => {
+            log::info!("paste_link: opening {url} in {}", webview.label());
+            webview.navigate(url).map_err(|e| e.to_string())?;
+            Ok(None)
+        }
+        Err(nav::LinkError::NotLink) => Ok(None),
+        Err(nav::LinkError::OtherSite) => Ok(Some("X 링크가 아님 · x.com·twitter.com 링크만 열 수 있음".into())),
+        Err(nav::LinkError::ShortLink) => {
+            Ok(Some("t.co 단축 링크는 못 엶 · 게시물 주소(x.com/…)를 복사해서 붙여넣기".into()))
+        }
+    }
 }
 
 #[tauri::command]
@@ -903,6 +935,7 @@ pub fn run() {
             panel_focused,
             shortcut,
             panel_keys,
+            paste_link,
             set_key,
             set_recording,
             pick_save_dir,

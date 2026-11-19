@@ -372,6 +372,8 @@
   // ------------------------------------------------ picking
   // idle -> start (pick first) -> end (pick last) -> busy -> idle
   let mode = "idle";
+  // panel.js skips "paste a link to open it" while this is not idle.
+  Object.defineProperty(window, Symbol.for("paneful.capturing"), { get: () => mode !== "idle" });
   let first = null; // { key, y }
   let hovered = null;
   let abort = false;

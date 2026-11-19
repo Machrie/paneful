@@ -276,6 +276,8 @@ function startDrag(e, el, i) {
 }
 
 // ---- shortcut overlay
+// Fixed: Ctrl/Cmd+V in a panel outside text fields (panel.js, paste_link).
+const PASTE_LABEL = "복사한 X 링크 열기 (입력창 밖)";
 const KEY_LABELS = {
   global: "창 숨기기/불러오기 (전역)",
   next: "다음 패널",
@@ -333,7 +335,7 @@ function fillKeys(dl, rows) {
 function buildKeys() {
   const dl = $("app-keys");
   dl.replaceChildren();
-  const rows = [[[MOD, "1–9"], "N번째 패널로 포커스"]];
+  const rows = [[[MOD, "1–9"], "N번째 패널로 포커스"], [[MOD, "V"], PASTE_LABEL]];
   for (const k of L.keys) if (k.caps.length) rows.push([k.caps, KEY_LABELS[k.id]]);
   fillKeys(dl, rows);
   if (L.hotkey.length) {
@@ -398,20 +400,25 @@ function buildSettings() {
   box.replaceChildren();
   const views = [L.global, ...L.keys];
   for (const v of views) box.append(keyRow(v));
-  // Fixed one, for reference.
-  const row = document.createElement("div");
-  row.className = "keyrow";
-  const name = document.createElement("span");
-  name.className = "kname";
-  name.textContent = "N번째 패널로 포커스";
-  const caps = document.createElement("span");
-  caps.className = "kcaps fixed";
-  caps.append(kbds([MOD, "1–9"]));
-  const note = document.createElement("span");
-  note.className = "knote";
-  note.textContent = "고정";
-  row.append(name, caps, note);
-  box.append(row);
+  // Fixed ones, for reference.
+  for (const [label, keys] of [
+    ["N번째 패널로 포커스", [MOD, "1–9"]],
+    [PASTE_LABEL, [MOD, "V"]],
+  ]) {
+    const row = document.createElement("div");
+    row.className = "keyrow";
+    const name = document.createElement("span");
+    name.className = "kname";
+    name.textContent = label;
+    const caps = document.createElement("span");
+    caps.className = "kcaps fixed";
+    caps.append(kbds(keys));
+    const note = document.createElement("span");
+    note.className = "knote";
+    note.textContent = "고정";
+    row.append(name, caps, note);
+    box.append(row);
+  }
 }
 
 function kbds(keys) {
