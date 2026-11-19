@@ -85,6 +85,11 @@ pub struct Settings {
     /// Download fixes to the X screen rules (rules.rs) from the repository.
     #[serde(default = "yes")]
     pub rules_update: bool,
+    /// Red "!" on the tray icon and the taskbar button (Windows) / number on
+    /// the Dock and menu bar icons (macOS) while something is unread. The
+    /// window title's "(3)" goes with it. Off: counts only in the tooltip.
+    #[serde(default = "yes")]
+    pub unread_badge: bool,
 }
 
 fn yes() -> bool {
@@ -125,6 +130,7 @@ impl Default for Settings {
             update_check: true,
             skip_version: None,
             rules_update: true,
+            unread_badge: true,
         }
     }
 }
@@ -193,6 +199,7 @@ impl Settings {
             update_check: v.get("update_check").and_then(|x| x.as_bool()).unwrap_or(true),
             skip_version: field(&v, "skip_version"),
             rules_update: v.get("rules_update").and_then(|x| x.as_bool()).unwrap_or(true),
+            unread_badge: v.get("unread_badge").and_then(|x| x.as_bool()).unwrap_or(true),
         })
     }
 
@@ -357,6 +364,7 @@ mod tests {
         assert!(l.keys.is_empty() && l.save_dir.is_none());
         assert!(l.update_check && l.skip_version.is_none());
         assert!(l.rules_update);
+        assert!(l.unread_badge);
     }
 
     #[test]

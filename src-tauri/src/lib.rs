@@ -155,6 +155,8 @@ struct LayoutPayload {
     skip_version: Option<String>,
     /// Download X screen rule fixes from the repository.
     rules_update: bool,
+    /// Unread badges on the tray / taskbar / Dock icons.
+    unread_badge: bool,
     /// Rules in effect and the last check, for the settings screen.
     rules: rules::Status,
 }
@@ -284,6 +286,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
         update: up,
         skip_version: s.skip_version.clone(),
         rules_update: s.rules_update,
+        unread_badge: s.unread_badge,
         rules: rules_st,
     };
     let _ = app.emit_to(HOST, "layout", payload);
@@ -1398,6 +1401,20 @@ async fn set_rules_update(app: AppHandle, state: State<'_, AppState>, on: bool) 
     Ok(())
 }
 
+/// Settings checkbox: unread badges on the tray / taskbar / Dock icons.
+#[tauri::command]
+async fn set_unread_badge(app: AppHandle, state: State<'_, AppState>, on: bool) -> Result<(), String> {
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        s.unread_badge = on;
+        s.clone()
+    };
+    state.save(&snapshot);
+    tray::refresh(&app);
+    relayout(&app);
+    Ok(())
+}
+
 /// Release page in the system browser.
 #[tauri::command]
 async fn open_update(app: AppHandle) -> Result<(), String> {
@@ -1587,7 +1604,8 @@ pub fn run() {
             open_update,
             panel_rules,
             check_rules,
-            set_rules_update
+            set_rules_update,
+            set_unread_badge
         ])
         .run(tauri::generate_context!())
         .expect("error while running paneful");

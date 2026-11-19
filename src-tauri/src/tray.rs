@@ -57,6 +57,11 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) {
         let _ = app.show();
     }
     let _ = w.show();
+    // Hiding drops the taskbar button and the overlay with it.
+    #[cfg(windows)]
+    if BADGE.load(Ordering::Relaxed) {
+        set_overlay(&w, true);
+    }
     crate::set_window_hidden(app, false);
     if w.is_minimized().unwrap_or(false) {
         let _ = w.unminimize();
@@ -113,12 +118,14 @@ fn tooltip(hotkey: Option<&str>) -> String {
     }
 }
 
-/// Tooltip, icon dot, menu bar number (macOS) and window title after the
-/// global shortcut or an unread count changed. Reads the state, lets go of
+/// Tooltip, icon badge, taskbar overlay (Windows) / Dock badge (macOS),
+/// menu bar number (macOS) and window title after the global shortcut, an
+/// unread count or the badge setting changed. Reads the state, lets go of
 /// every lock, then talks to the tray and the window.
 pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
     let state = app.state::<crate::AppState>();
     let hotkey = state.hotkey.lock().unwrap().clone();
+    let badges = state.settings.lock().unwrap().unread_badge;
     let lines = crate::unread_lines(&state);
 
     let mut tip = tooltip(hotkey.as_deref());
@@ -130,7 +137,12 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
     if tip.chars().count() > 120 {
         tip = tip.chars().take(119).collect::<String>() + "…";
     }
-    let total = unread::total(lines.iter().flat_map(|(_, u)| [u.n.as_str(), u.dm.as_str()]));
+    // Badges off: the count only goes in the tooltip (and the app's own bar).
+    let total = if badges {
+        unread::total(lines.iter().flat_map(|(_, u)| [u.n.as_str(), u.dm.as_str()]))
+    } else {
+        String::new()
+    };
 
     // Last values handed out, so nothing is set again when only one count moved.
     static LAST: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
@@ -142,16 +154,18 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
     if prev.as_ref() == Some(&now) {
         return;
     }
-    let dot_changed = prev.as_ref().is_none_or(|p| p.1.is_empty() != total.is_empty());
+    let badge_changed = prev.as_ref().is_none_or(|p| p.1.is_empty() != total.is_empty());
+    let total_changed = prev.as_ref().is_none_or(|p| p.1 != total);
+    BADGE.store(!total.is_empty(), Ordering::Relaxed);
 
     if let Some(t) = app.tray_by_id("main") {
         let _ = t.set_tooltip(Some(&tip));
-        if dot_changed {
+        if badge_changed {
             if let Some(icon) = app.default_window_icon() {
                 let img = if total.is_empty() {
                     icon.clone().to_owned()
                 } else {
-                    let rgba = unread::with_dot(icon.rgba(), icon.width(), icon.height());
+                    let rgba = unread::with_badge(icon.rgba(), icon.width(), icon.height());
                     tauri::image::Image::new_owned(rgba, icon.width(), icon.height())
                 };
                 if let Err(e) = t.set_icon(Some(img)) {
@@ -161,12 +175,39 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
         }
         // macOS: the number next to the menu bar icon. Not on Windows.
         #[cfg(target_os = "macos")]
-        let _ = t.set_title(if total.is_empty() { None } else { Some(total.as_str()) });
+        if total_changed {
+            let _ = t.set_title(if total.is_empty() { None } else { Some(total.as_str()) });
+        }
     }
-    // Taskbar / Dock window list, like a browser tab: "(3) Paneful".
     if let Some(w) = app.get_window(MAIN) {
-        let title = if total.is_empty() { "Paneful".to_string() } else { format!("({total}) Paneful") };
-        let _ = w.set_title(&title);
+        // Taskbar / Dock window list, like a browser tab: "(3) Paneful".
+        if total_changed {
+            let title = if total.is_empty() { "Paneful".to_string() } else { format!("({total}) Paneful") };
+            let _ = w.set_title(&title);
+        }
+        #[cfg(windows)]
+        if badge_changed {
+            set_overlay(&w, !total.is_empty());
+        }
+        // Dock icon badge (shows while the window is out; hidden = no Dock icon).
+        #[cfg(target_os = "macos")]
+        if total_changed {
+            if let Err(e) = w.set_badge_label(if total.is_empty() { None } else { Some(total.clone()) }) {
+                log::warn!("dock badge not updated: {e}");
+            }
+        }
+    }
+}
+
+/// Badge currently on (something unread and badges turned on).
+static BADGE: AtomicBool = AtomicBool::new(false);
+
+/// Windows: red "!" over the taskbar button. Off: none.
+#[cfg(windows)]
+fn set_overlay<R: Runtime>(w: &tauri::Window<R>, on: bool) {
+    let img = on.then(|| tauri::image::Image::new_owned(unread::overlay(32), 32, 32));
+    if let Err(e) = w.set_overlay_icon(img) {
+        log::warn!("taskbar badge not updated: {e}");
     }
 }
 

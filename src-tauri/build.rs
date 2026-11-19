@@ -40,6 +40,7 @@ fn main() {
             "panel_rules",
             "check_rules",
             "set_rules_update",
+            "set_unread_badge",
         ]),
     ))
     .expect("failed to run tauri-build");
