@@ -48,6 +48,12 @@ pub(crate) struct AppState {
     settings_open: Mutex<bool>,
     /// Capture preview open: panels are hidden the same way.
     capture: Mutex<bool>,
+    /// Active panel fills the window, the others are hidden. Not persisted.
+    zoom: Mutex<bool>,
+    /// Window hidden to the tray: panels are hidden too, so WebView2 /
+    /// WKWebView treat the pages as not visible (no painting, throttled
+    /// timers). Pages keep running.
+    hidden: Mutex<bool>,
     /// Global show/hide shortcut as registered (None: off or failed).
     hotkey: Mutex<Option<String>>,
     /// Why the shortcut isn't registered (start or last change attempt).
@@ -81,6 +87,8 @@ struct PanelView {
     color: String,
     active: bool,
     rect: layout::Rect,
+    /// On screen (false: hidden while another panel is zoomed).
+    shown: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -93,6 +101,8 @@ struct LayoutPayload {
     help: bool,
     /// Capture preview open.
     capture: bool,
+    /// One panel fills the window (see AppState::zoom).
+    zoom: bool,
     top: f64,
     gap: f64,
     min_panel: f64,
@@ -158,10 +168,31 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
     let hotkey = state.hotkey.lock().unwrap().clone();
     let hotkey_error = state.hotkey_error.lock().unwrap().clone();
     let capture = *state.capture.lock().unwrap();
+    let zoom = {
+        // Nothing to zoom with one panel; don't let it come back on later.
+        let mut z = state.zoom.lock().unwrap();
+        if s.accounts.len() < 2 {
+            *z = false;
+        }
+        *z
+    };
+    let hidden = *state.hidden.lock().unwrap();
     let up = state.update.lock().unwrap().clone();
     let (w, h) = logical_size(&window);
     let top = top_of(&s);
-    let rects = layout::panels(w, h, top, &s.ratios);
+    let mut rects = layout::panels(w, h, top, &s.ratios);
+    // Zoomed: the active panel (first one if none) takes the whole area.
+    let zoomed = if zoom && s.accounts.len() > 1 {
+        let ids: Vec<Uuid> = s.accounts.iter().map(|a| a.id).collect();
+        active.filter(|a| ids.contains(a)).or(ids.first().copied())
+    } else {
+        None
+    };
+    if let Some(z) = zoomed {
+        if let Some(i) = s.accounts.iter().position(|a| a.id == z) {
+            rects[i] = layout::Rect { x: 0.0, y: top, w, h: (h - top).max(0.0) };
+        }
+    }
 
     if let Some(host) = app.get_webview(HOST) {
         let _ = host.set_bounds(tauri::Rect {
@@ -176,9 +207,12 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
                 position: LogicalPosition::new(r.x, r.y).into(),
                 size: LogicalSize::new(r.w, r.h).into(),
             });
+        }
+        let shown = zoomed.is_none_or(|z| z == acc.id);
+        if let Some(wv) = app.get_webview(&panel_label(acc)) {
             // Native webviews sit above the host UI; the overlays can only
             // show while they are hidden.
-            let _ = if help || settings_open || capture { wv.hide() } else { wv.show() };
+            let _ = if help || settings_open || capture || hidden || !shown { wv.hide() } else { wv.show() };
         }
         panels.push(PanelView {
             id: acc.id.to_string(),
@@ -186,6 +220,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
             color: acc.color.clone(),
             active: active == Some(acc.id),
             rect: *r,
+            shown,
         });
     }
     let payload = LayoutPayload {
@@ -194,6 +229,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
         bar: bar_visible(&s),
         help,
         capture,
+        zoom: zoomed.is_some(),
         top,
         gap: layout::GAP,
         min_panel: layout::MIN_PANEL,
@@ -352,7 +388,7 @@ fn purge_pending_profiles(app: &tauri::App, s: &mut Settings) {
 
 // ---------------------------------------------------------------- commands
 // The host webview may call these (capabilities/host.json); x.com panels only
-// panel_focused, shortcut, panel_keys, paste_link, open_link and capture_begin/shot/drop/finish
+// panel_focused, shortcut, panel_keys, paste_link, open_link, send_link and capture_begin/shot/drop/finish
 // (capabilities/panel.json). Commands are async
 // because add_child from a sync command deadlocks on WebView2.
 
@@ -398,12 +434,14 @@ async fn commit_layout(app: AppHandle, state: State<'_, AppState>, ratios: Vec<f
 pub(crate) fn focus_account<R: Runtime>(app: &AppHandle<R>, id: Uuid) {
     let state = app.state::<AppState>();
     let label = format!("panel-{}", id.simple());
-    if let Some(wv) = app.get_webview(&label) {
-        let _ = wv.set_focus();
-    }
+    // Mark it active (and lay out) first: while zoomed, that is what shows
+    // the panel, and a hidden webview can't take focus.
     let changed = state.active.lock().unwrap().replace(id) != Some(id);
     if changed {
         relayout(app);
+    }
+    if let Some(wv) = app.get_webview(&label) {
+        let _ = wv.set_focus();
     }
 }
 
@@ -547,6 +585,33 @@ fn run_shortcut(app: &AppHandle, state: &AppState, action: &str, index: Option<u
     if was_open {
         relayout(&app);
     }
+    if action == "zoom" {
+        let on = {
+            let mut z = state.zoom.lock().unwrap();
+            *z = !*z;
+            *z
+        };
+        log::info!("zoom {on}");
+        relayout(&app);
+        let active = *state.active.lock().unwrap(); // see set_overlay
+        let ids: Vec<Uuid> = state.settings.lock().unwrap().accounts.iter().map(|a| a.id).collect();
+        if let Some(id) = active.filter(|a| ids.contains(a)).or(ids.first().copied()) {
+            focus_account(&app, id);
+        }
+        return Ok(());
+    }
+    if action == "send" {
+        // From the host UI: the active panel works out what to send.
+        let active = *state.active.lock().unwrap();
+        let ids: Vec<Uuid> = state.settings.lock().unwrap().accounts.iter().map(|a| a.id).collect();
+        if let Some(id) = active.filter(|a| ids.contains(a)).or(ids.first().copied()) {
+            focus_account(&app, id);
+            if let Some(wv) = app.get_webview(&format!("panel-{}", id.simple())) {
+                let _ = wv.eval("window.dispatchEvent(new Event('paneful-send'))");
+            }
+        }
+        return Ok(());
+    }
     if action == "bar" {
         let snapshot = {
             let mut s = state.settings.lock().unwrap();
@@ -633,6 +698,147 @@ async fn open_link(state: State<'_, AppState>, webview: Webview, url: String) ->
     webview.navigate(url).map_err(|e| e.to_string())
 }
 
+/// One panel a link can be sent to.
+#[derive(Serialize)]
+struct Target {
+    id: String,
+    label: String,
+    color: String,
+    /// Place on screen, from 0 (Ctrl/Cmd+1 is 0).
+    index: usize,
+}
+
+/// What panel.js does after send_link.
+#[derive(Serialize, Default)]
+struct Sent {
+    /// Opened in this panel (its name).
+    to: Option<String>,
+    /// More than one other panel: ask which one.
+    targets: Vec<Target>,
+    msg: Option<String>,
+}
+
+/// "다른 패널에서 열기" (panel.js): open `url` in the panel of `to`, or,
+/// with no `to`, in the only other panel. With several others, hand back the
+/// list so the panel can ask. Only x.com pages (nav::x_link), and no lock
+/// is held while touching webviews. The caller is the panel by its label.
+#[tauri::command]
+async fn send_link(app: AppHandle, state: State<'_, AppState>, webview: Webview, url: String, to: Option<String>) -> Result<Sent, String> {
+    let (me, others): (Uuid, Vec<(Uuid, Target)>) = {
+        let s = state.settings.lock().unwrap();
+        let me = s
+            .accounts
+            .iter()
+            .find(|a| panel_label(a) == webview.label())
+            .map(|a| a.id)
+            .ok_or("not a panel")?;
+        let others = s
+            .accounts
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.id != me)
+            .map(|(i, a)| (a.id, Target { id: a.id.to_string(), label: a.label.clone(), color: a.color.clone(), index: i }))
+            .collect();
+        (me, others)
+    };
+    let url = nav::x_link(&url).map_err(|_| "X 링크가 아님".to_string())?;
+    let pick = match &to {
+        Some(t) => others.iter().find(|(_, o)| &o.id == t).ok_or("그 패널이 없음")?,
+        None => match others.len() {
+            0 => return Ok(Sent { msg: Some("다른 패널이 없음 · 상단 바의 ＋ 계정으로 추가".into()), ..Default::default() }),
+            1 => &others[0],
+            _ => return Ok(Sent { targets: others.into_iter().map(|(_, t)| t).collect(), ..Default::default() }),
+        },
+    };
+    let (id, label) = (pick.0, pick.1.label.clone());
+    let wv = app.get_webview(&format!("panel-{}", id.simple())).ok_or("그 패널이 없음")?;
+    log::info!("send_link: {url} from {me} to {id}");
+    wv.navigate(url).map_err(|e| e.to_string())?;
+    focus_account(&app, id);
+    Ok(Sent { to: Some(label), ..Default::default() })
+}
+
+/// Longest panel name, in characters.
+const MAX_LABEL: usize = 30;
+
+/// Settings: new name for a panel.
+#[tauri::command]
+async fn rename_account(app: AppHandle, state: State<'_, AppState>, id: String, label: String) -> Result<(), String> {
+    let label: String = label.trim().chars().filter(|c| !c.is_control()).collect();
+    if label.is_empty() {
+        return Err("이름이 비어 있음".into());
+    }
+    if label.chars().count() > MAX_LABEL {
+        return Err(format!("이름은 {MAX_LABEL}자까지"));
+    }
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        let acc = s.accounts.iter_mut().find(|a| a.id.to_string() == id).ok_or("no such account")?;
+        acc.label = label;
+        s.clone()
+    };
+    state.save(&snapshot);
+    relayout(&app);
+    Ok(())
+}
+
+/// Settings: move a panel to place `to` (0 = leftmost). Its width share
+/// moves with it; Ctrl/Cmd+1..9 follow the new order.
+#[tauri::command]
+async fn move_account(app: AppHandle, state: State<'_, AppState>, id: String, to: usize) -> Result<(), String> {
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        let from = s.accounts.iter().position(|a| a.id.to_string() == id).ok_or("no such account")?;
+        if !settings::move_panel(&mut s, from, to) {
+            return Ok(());
+        }
+        s.clone()
+    };
+    state.save(&snapshot);
+    relayout(&app);
+    Ok(())
+}
+
+/// Window hidden to the tray (`hidden`) or back. Hiding: every playing
+/// video/audio is paused (panel.js) and, on Windows, the panel is muted
+/// as well, so nothing can be heard while hidden; the panels are hidden
+/// too (relayout), which lets the webviews stop painting. Pages keep
+/// running (unread counts still update). Shown again: unmuted, but paused
+/// media stay paused.
+/// Called before the window hides and after it shows, never on the main
+/// thread and with no lock held (tray.rs).
+pub(crate) fn set_window_hidden<R: Runtime>(app: &AppHandle<R>, hidden: bool) {
+    let state = app.state::<AppState>();
+    *state.hidden.lock().unwrap() = hidden;
+    let labels: Vec<String> = state.settings.lock().unwrap().accounts.iter().map(panel_label).collect();
+    for label in &labels {
+        let Some(wv) = app.get_webview(label) else { continue };
+        let _ = wv.eval(format!("window.dispatchEvent(new CustomEvent('paneful-hidden',{{detail:{hidden}}}))"));
+        #[cfg(windows)]
+        set_muted(&wv, hidden);
+    }
+    relayout(app);
+}
+
+/// Windows: WebView2's own mute, which also covers sound from frames the
+/// page script can't reach (embedded players).
+#[cfg(windows)]
+fn set_muted<R: Runtime>(wv: &tauri::Webview<R>, muted: bool) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_8;
+    use windows::core::Interface;
+    let label = wv.label().to_string();
+    let _ = wv.with_webview(move |pw| unsafe {
+        let r = pw
+            .controller()
+            .CoreWebView2()
+            .and_then(|c| c.cast::<ICoreWebView2_8>())
+            .and_then(|c| c.SetIsMuted(muted));
+        if let Err(e) = r {
+            log::warn!("[{label}] mute {muted} failed: {e}");
+        }
+    });
+}
+
 #[tauri::command]
 async fn reload_panel(app: AppHandle, id: String) -> Result<(), String> {
     let label = format!("panel-{}", id.replace('-', ""));
@@ -661,6 +867,8 @@ async fn add_account(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
         drop(s);
         state.save(&snapshot);
     }
+    // The new panel should be seen (it starts on the login page).
+    *state.zoom.lock().unwrap() = false;
     relayout(&app);
     Ok(())
 }
@@ -971,6 +1179,8 @@ pub fn run() {
                 hotkey: Mutex::new(hotkey),
                 hotkey_error: Mutex::new(hotkey_error),
                 capture: Mutex::new(false),
+                zoom: Mutex::new(false),
+                hidden: Mutex::new(false),
                 update: Mutex::new(update::Status::default()),
                 path,
                 persist,
@@ -1044,6 +1254,9 @@ pub fn run() {
             panel_keys,
             paste_link,
             open_link,
+            send_link,
+            rename_account,
+            move_account,
             set_key,
             set_recording,
             pick_save_dir,
