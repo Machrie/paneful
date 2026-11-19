@@ -260,10 +260,32 @@
     sent = key;
     call("panel_unread", u).catch(() => (sent = "")); // retried on the next tick
   };
-  // Cheap (two selectors) and only sends on change. While the window is
-  // hidden the browser may run this less often; X's own badge updates are
-  // throttled the same way.
-  setInterval(checkUnread, 2000);
+  // Cheap (two selectors) and only sends on change.
+  // Driven by DOM changes, not only a timer: in a hidden page (window in
+  // the tray, panels hidden) Chromium slows repeating timers down to once a
+  // minute after a few minutes, while X still gets its updates over the
+  // network and still renders the badge, and MutationObserver callbacks
+  // still run. One check per burst of changes; a one-shot timeout started
+  // from the observer isn't a chained timer, so it isn't held back that far.
+  let queued = false;
+  const soon = () => {
+    if (queued) return;
+    queued = true;
+    setTimeout(() => {
+      queued = false;
+      checkUnread();
+    }, 500);
+  };
+  const watch = () => {
+    new MutationObserver(soon).observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+  };
+  if (document.documentElement) watch();
+  else document.addEventListener("DOMContentLoaded", watch);
+  setInterval(checkUnread, 5000); // fallback, e.g. a badge the observer missed
   document.addEventListener("DOMContentLoaded", checkUnread);
 
   window.addEventListener("focus", () => call("panel_focused").catch(() => {}));
