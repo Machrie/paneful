@@ -8,10 +8,15 @@
 </head>
 <body>
   <div id="strip"></div>
+  <div id="update-mark" hidden></div>
   <header id="bar" hidden>
     <div id="tabs"></div>
     <div class="actions">
       <span id="status" role="alert" hidden></span>
+      <span id="update-box" hidden>
+        <button id="update" class="pill update"></button>
+        <button id="update-skip" class="icon" data-icon="close" title="이 버전 건너뛰기"></button>
+      </span>
       <button id="add" class="pill" title="계정 추가">＋ 계정</button>
       <button id="capture" class="icon" data-icon="camera"></button>
       <button id="tray" class="icon" data-icon="eyeOff"></button>
@@ -60,6 +65,17 @@
         <h2>단축키</h2>
         <p class="hint">키 칸을 누르고 새 조합을 누르면 바로 바뀜. Ctrl·Alt·⌘ 중 하나는 같이 눌러야 함 (F1~F24는 단독 가능).</p>
         <div id="key-rows"></div>
+      </section>
+      <section>
+        <h2>새 버전</h2>
+        <p class="hint">GitHub에 새 버전이 올라오면 상단 바와 트레이 메뉴에 표시. 설치는 직접 (받기를 누르면 릴리스 페이지가 열림). 지금 버전 <b id="cur-ver"></b></p>
+        <label class="check"><input type="checkbox" id="up-auto"> 시작할 때와 6시간마다 확인</label>
+        <div class="dirrow uprow">
+          <span id="up-state"></span>
+          <button id="up-open" class="pill primary" hidden>받기</button>
+          <button id="up-skip" class="pill" hidden>이 버전 건너뛰기</button>
+          <button id="up-check" class="pill">지금 확인</button>
+        </div>
       </section>
       <p id="settings-msg" class="foot" role="status"></p>
     </div>

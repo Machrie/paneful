@@ -116,20 +116,59 @@ pub fn set_tooltip<R: Runtime>(app: &AppHandle<R>, hotkey: Option<&str>) {
     }
 }
 
-/// Tray / menu bar icon with "보이기/숨기기", "설정" and "종료".
-/// `hotkey` is only shown as a hint in the tooltip.
-pub fn create<R: Runtime>(app: &AppHandle<R>, hotkey: Option<&str>) -> tauri::Result<()> {
+/// With a newer release on offer (`update`, "0.0.5"), a "새 버전 받기" item
+/// goes on top.
+fn menu<R: Runtime>(app: &AppHandle<R>, update: Option<&str>) -> tauri::Result<Menu<R>> {
     let toggle_item = MenuItem::with_id(app, "toggle", "Paneful 보이기/숨기기", true, None::<&str>)?;
     let settings_item = MenuItem::with_id(app, "settings", "설정", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "종료", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&toggle_item, &settings_item, &sep, &quit])?;
+    match update {
+        Some(v) => {
+            let up = MenuItem::with_id(app, "update", format!("새 버전 v{v} 받기"), true, None::<&str>)?;
+            let sep2 = PredefinedMenuItem::separator(app)?;
+            Menu::with_items(app, &[&up, &sep2, &toggle_item, &settings_item, &sep, &quit])
+        }
+        None => Menu::with_items(app, &[&toggle_item, &settings_item, &sep, &quit]),
+    }
+}
+
+/// New version notice changed (None: nothing to announce).
+pub fn set_update<R: Runtime>(app: &AppHandle<R>, update: Option<&str>) {
+    static SHOWN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    let mut shown = SHOWN.lock().unwrap_or_else(|e| e.into_inner());
+    if shown.as_deref() == update {
+        return;
+    }
+    let Some(t) = app.tray_by_id("main") else { return };
+    match menu(app, update) {
+        Ok(m) => {
+            if let Err(e) = t.set_menu(Some(m)) {
+                log::warn!("tray menu not updated: {e}");
+                return;
+            }
+            *shown = update.map(str::to_string);
+        }
+        Err(e) => log::warn!("tray menu not built: {e}"),
+    }
+}
+
+/// Tray / menu bar icon with "보이기/숨기기", "설정" and "종료" (and "새 버전
+/// 받기" while one is on offer, see set_update).
+/// `hotkey` is only shown as a hint in the tooltip.
+pub fn create<R: Runtime>(app: &AppHandle<R>, hotkey: Option<&str>) -> tauri::Result<()> {
+    let menu = menu(app, None)?;
 
     let mut b = TrayIconBuilder::with_id("main")
         .tooltip(tooltip(hotkey))
         .menu(&menu)
         .on_menu_event(|app, e| match e.id().as_ref() {
             "toggle" => toggle_later(app, Toggle::Tray),
+            "update" => {
+                if let Err(e) = crate::update::open(app) {
+                    log::warn!("opening the release page failed: {e}");
+                }
+            }
             "settings" => {
                 // Worker thread, same reason as toggle_later.
                 let app = app.clone();

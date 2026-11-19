@@ -26,6 +26,10 @@ fn main() {
             "capture_close",
             "capture_slice",
             "capture_export",
+            "check_update",
+            "set_update_check",
+            "skip_update",
+            "open_update",
         ]),
     ))
     .expect("failed to run tauri-build");

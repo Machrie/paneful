@@ -55,12 +55,67 @@ function updateTitles() {
   $("hide").title = withKey("상단 바 숨기기", keyText("bar"));
   $("capture").title = withKey("게시물 캡쳐", keyText("capture")) + ": 첫 게시물, 마지막 게시물 순서로 클릭";
   $("tray").title = withKey("창을 트레이로 숨기기", L.hotkey.join("+"));
+  stripTitle();
+}
+
+function stripTitle() {
   const bar = keyText("bar");
   const help = keyText("help");
-  stripEl.title = [`클릭${bar ? ` 또는 ${bar}` : ""}: 상단 바 표시`, help && `${help}: 단축키`]
+  stripEl.title = [
+    L.update_notice && `새 버전 v${L.update_notice} 있음`,
+    `클릭${bar ? ` 또는 ${bar}` : ""}: 상단 바 표시`,
+    help && `${help}: 단축키`,
+  ]
     .filter(Boolean)
     .join(" · ");
 }
+
+// ---- new version notice (top bar pill, strip mark, settings section)
+let updateShape = "";
+function renderUpdate() {
+  const n = L.update_notice;
+  const u = L.update || {};
+  const sh = JSON.stringify([n, u, L.update_check, L.skip_version, L.version, L.bar]);
+  if (sh === updateShape) return;
+  updateShape = sh;
+  $("update-box").hidden = !n;
+  $("update-mark").hidden = !n || L.bar;
+  if (n) {
+    $("update").textContent = `v${n} 받기`;
+    $("update").title = `새 버전 v${n}: 릴리스 페이지 열기 (지금 v${L.version})`;
+  }
+  stripTitle();
+
+  $("cur-ver").textContent = `v${L.version}`;
+  $("up-auto").checked = L.update_check;
+  $("up-check").disabled = !!u.checking;
+  const st = $("up-state");
+  st.classList.remove("ok", "warn");
+  const skipped = u.newer && L.skip_version === u.newer;
+  if (u.checking) st.textContent = "확인 중…";
+  else if (u.error) {
+    st.textContent = `확인 실패: ${u.error}`;
+    st.classList.add("warn");
+  } else if (u.newer) {
+    st.textContent = `새 버전 v${u.newer} 있음${skipped ? " (건너뜀)" : ""}`;
+    st.classList.add("ok");
+  } else if (u.up_to_date) st.textContent = "최신 버전";
+  else st.textContent = L.update_check ? "아직 확인 안 함" : "확인 꺼짐";
+  $("up-open").hidden = !u.newer;
+  $("up-skip").hidden = !u.newer;
+  $("up-skip").textContent = skipped ? "다시 알림" : "이 버전 건너뛰기";
+}
+const openUpdate = () => invoke("open_update").catch(showError);
+$("update").onclick = openUpdate;
+$("update-skip").onclick = () => invoke("skip_update").catch(showError);
+$("up-open").onclick = () => invoke("open_update").catch((e) => settingsMsg(e, true));
+$("up-skip").onclick = () => {
+  const undo = L.update.newer && L.skip_version === L.update.newer;
+  invoke("skip_update", { undo }).catch((e) => settingsMsg(e, true));
+};
+$("up-check").onclick = () => invoke("check_update").catch((e) => settingsMsg(e, true));
+$("up-auto").onchange = (e) =>
+  invoke("set_update_check", { on: e.target.checked }).catch((err) => settingsMsg(err, true));
 
 function showError(e) {
   statusEl.textContent = String(e);
@@ -113,6 +168,7 @@ function render() {
     shape = s;
     build();
   }
+  renderUpdate();
   place();
 }
 

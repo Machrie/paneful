@@ -22,6 +22,10 @@
     "allow-open-save-dir",
     "allow-capture-close",
     "allow-capture-slice",
-    "allow-capture-export"
+    "allow-capture-export",
+    "allow-check-update",
+    "allow-set-update-check",
+    "allow-skip-update",
+    "allow-open-update"
   ]
 }

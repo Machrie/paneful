@@ -117,6 +117,19 @@ button.kcaps:hover { border-color: var(--line); background: var(--hover); }
 .kerr:empty { display: none; }
 .warn { color: var(--danger); }
 #settings-msg:empty { display: none; }
+/* ---- new version notice */
+:root { --ok: #00ba7c; }
+#update-box { display: flex; align-items: center; gap: 2px; margin-right: 4px; }
+#update-box[hidden] { display: none; }
+.pill.update { border-color: var(--ok); color: var(--ok); }
+/* Bar hidden: a short green mark at the right end of the strip. Clicks go
+   through to the strip (shows the bar, where the pill is). */
+#update-mark { position: fixed; top: 0; right: 0; width: 36px; height: var(--top); z-index: 1;
+  border-radius: 3px; background: var(--ok); pointer-events: none; }
+.uprow { margin-top: 8px; }
+#up-state { flex: 1; min-width: 0; color: var(--muted); font-size: 13px; }
+#up-state.ok { color: var(--ok); }
+.sheet .check { width: fit-content; }
 /* ---- capture preview (panels are hidden while it is open) */
 #cap { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--bg); }
 .cap-head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line);
