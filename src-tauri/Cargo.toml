@@ -1,6 +1,6 @@
 [package]
 name = "paneful"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2021"
 description = "Lightweight split-pane desktop client for x.com with isolated accounts"
 license = "MIT"

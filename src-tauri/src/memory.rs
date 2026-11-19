@@ -56,6 +56,7 @@ pub enum Owner {
 
 /// One process and the webviews (panel labels / HOST) it serves. Empty or
 /// more than one: shared.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 pub fn owner_of(owners: &[String]) -> Owner {
     let mut o: Vec<&String> = owners.iter().collect();
     o.sort();
