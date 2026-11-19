@@ -11,6 +11,7 @@
     "allow-set-ratios",
     "allow-commit-layout",
     "allow-reload-panel",
+    "allow-panel-memory",
     "allow-add-account",
     "allow-remove-account",
     "allow-rename-account",

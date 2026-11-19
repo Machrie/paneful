@@ -2860,6 +2860,7 @@ name = "paneful"
 version = "0.0.5"
 dependencies = [
  "block2",
+ "libc",
  "log",
  "objc2",
  "objc2-app-kit",

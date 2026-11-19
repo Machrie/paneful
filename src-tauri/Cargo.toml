@@ -44,7 +44,7 @@ tauri-plugin-dialog = "2"
 # Same versions tauri-runtime-wry 2.12.5 uses: the M0 profile check and the
 # post capture screenshot (CapturePreview into a memory stream, snap.rs).
 webview2-com = "0.39"
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Post capture screenshot (WKWebView takeSnapshot, snap.rs). Same versions
@@ -54,3 +54,5 @@ block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSError", "NSString"] }
 objc2-app-kit = { version = "0.3", features = ["NSImage", "NSImageRep", "NSBitmapImageRep"] }
 objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKSnapshotConfiguration", "block2", "objc2-app-kit"] }
+# Panel memory (memory.rs): proc_pid_rusage. Already in the tree.
+libc = "0.2"
