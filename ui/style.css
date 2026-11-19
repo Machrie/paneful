@@ -41,9 +41,9 @@ svg { display: block; width: 16px; height: 16px; fill: none; stroke: currentColo
 .tab .badge { flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
   background: var(--danger); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
 .tab .badge.dm { background: none; color: var(--accent); border: 1px solid var(--accent); line-height: 16px; }
-.tab .zoom { flex: none; height: 18px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--line);
+.tab .scale { flex: none; height: 18px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--line);
   color: var(--muted); font-size: 11px; font-weight: 700; }
-.tab .zoom:hover { color: var(--fg); background: var(--hover); }
+.tab .scale:hover { color: var(--fg); background: var(--hover); }
 .tab .group { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 /* Reload/delete only on hover (or while confirming a delete). */
 .tab .group:not(.ask) { opacity: 0; transition: opacity .15s; }
@@ -156,3 +156,12 @@ button.kcaps:hover { border-color: var(--line); background: var(--hover); }
 #cap-msg.error { color: var(--danger); }
 #cap-view { flex: 1; overflow: auto; padding: 0 16px 24px; display: flex; flex-direction: column; align-items: center; }
 #cap-view canvas { display: block; max-width: 100%; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+/* ---- settings: panel names and order */
+#panel-rows { display: grid; grid-template-columns: auto 1fr auto auto; gap: 6px 8px; align-items: center; }
+.panelrow { display: contents; }
+.pnum { display: flex; align-items: center; gap: 6px; min-width: 64px; color: var(--muted); font-size: 12px; }
+.pnum::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
+.pname { min-width: 0; padding: 6px 10px; border-radius: 8px; background: var(--surface); color: var(--fg);
+  border: 1px solid var(--line); font: inherit; user-select: text; -webkit-user-select: text; }
+.pname:focus { outline: none; border-color: var(--accent); }
+.icon:disabled { opacity: .3; cursor: default; background: none; }

@@ -238,9 +238,46 @@ impl Settings {
     }
 }
 
+/// Move panel `from` to place `to` (clamped), with its width share.
+/// false: nothing moved.
+pub fn move_panel(s: &mut Settings, from: usize, to: usize) -> bool {
+    let n = s.accounts.len();
+    if from >= n || n < 2 {
+        return false;
+    }
+    let to = to.min(n - 1);
+    if to == from {
+        return false;
+    }
+    let acc = s.accounts.remove(from);
+    s.accounts.insert(to, acc);
+    if s.ratios.len() == n {
+        let r = s.ratios.remove(from);
+        s.ratios.insert(to, r);
+    } else {
+        s.fix_ratios();
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn move_keeps_widths() {
+        let mut s = Settings::default();
+        s.accounts.push(Account::new("계정 3", COLORS[2]));
+        s.ratios = vec![0.5, 0.3, 0.2];
+        let ids: Vec<Uuid> = s.accounts.iter().map(|a| a.id).collect();
+        assert!(move_panel(&mut s, 0, 2));
+        assert_eq!(s.accounts.iter().map(|a| a.id).collect::<Vec<_>>(), vec![ids[1], ids[2], ids[0]]);
+        assert_eq!(s.ratios, vec![0.3, 0.2, 0.5]);
+        assert!(!move_panel(&mut s, 2, 99));
+        assert!(move_panel(&mut s, 1, 0));
+        assert_eq!(s.accounts[0].id, ids[2]);
+        assert!(!move_panel(&mut s, 5, 0));
+    }
 
     #[test]
     fn ratios_normalised() {

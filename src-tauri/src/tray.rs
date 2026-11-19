@@ -36,6 +36,9 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) {
         log::warn!("not hiding: no tray icon and no global shortcut");
         return;
     }
+    // Sound off (and panels hidden) before the window goes, so nothing
+    // plays on once it is out of sight.
+    crate::set_window_hidden(app, true);
     let _ = w.hide();
     #[cfg(target_os = "macos")]
     {
@@ -54,6 +57,7 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) {
         let _ = app.show();
     }
     let _ = w.show();
+    crate::set_window_hidden(app, false);
     if w.is_minimized().unwrap_or(false) {
         let _ = w.unminimize();
     }
