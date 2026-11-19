@@ -2,8 +2,9 @@
 // scripts. Two jobs, nothing else:
 // 1. tell the app when this panel gets keyboard focus (active-panel marker)
 // 2. catch the app's own shortcuts before x.com sees them
-// The panel capability only allows `panel_focused`, `shortcut` and
-// `panel_keys` (read the configured bindings).
+// The panel capability only allows `panel_focused`, `shortcut`,
+// `panel_keys` (read the configured bindings) and, for capture.js,
+// `capture_posts`.
 // Keep the key mapping in sync with ui/app.js.
 (() => {
   if (window.top !== window) return;
@@ -46,7 +47,7 @@
       e.preventDefault();
       e.stopImmediatePropagation();
       // Holding a toggle key would flip it on and off; only the first press counts.
-      if (!e.repeat || !["bar", "help", "settings"].includes(a.action)) call("shortcut", a).catch(() => {});
+      if (!e.repeat || !["bar", "help", "settings", "capture"].includes(a.action)) call("shortcut", a).catch(() => {});
     },
     true,
   );

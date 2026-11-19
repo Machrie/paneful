@@ -37,6 +37,7 @@ const ICONS = {
   eyeOff: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c5 0 9 4.5 10 7a13 13 0 0 1-2.9 3.9M6.6 6.6C4.3 8 2.6 10.2 2 12c1 2.5 5 7 10 7a9.6 9.6 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   gear: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  camera: '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg>',
 };
 function setIcon(el, name) {
   el.innerHTML = ICONS[name];
@@ -52,6 +53,7 @@ function updateTitles() {
   $("help").title = withKey("단축키", keyText("help"));
   $("settings-btn").title = withKey("설정", keyText("settings"));
   $("hide").title = withKey("상단 바 숨기기", keyText("bar"));
+  $("capture").title = withKey("게시물 캡쳐", keyText("capture")) + ": 첫 게시물, 마지막 게시물 순서로 클릭";
   $("tray").title = withKey("창을 트레이로 숨기기", L.hotkey.join("+"));
   const bar = keyText("bar");
   const help = keyText("help");
@@ -280,6 +282,7 @@ const KEY_LABELS = {
   prev: "이전 패널",
   bar: "상단 바 보이기/숨기기",
   help: "이 단축키 창",
+  capture: "게시물 캡쳐 (첫 → 마지막 게시물 클릭)",
   settings: "설정",
 };
 // X's own shortcuts, only the ones that agree across several public lists
@@ -537,6 +540,7 @@ window.addEventListener(
   true,
 );
 
+$("capture").onclick = () => invoke("shortcut", { action: "capture" }).catch(showError);
 $("add").onclick = () => invoke("add_account").catch(showError);
 $("tray").onclick = () => invoke("shortcut", { action: "tray" }).catch(showError);
 const toggleBar = () => invoke("shortcut", { action: "bar" }).catch(showError);
@@ -547,8 +551,8 @@ stripEl.onclick = toggleBar;
 // shortcuts keep working without clicking back into it. Runs after the
 // button handlers (bubble phase on document).
 document.addEventListener("click", (e) => {
-  if (e.target.closest("#help, #tray, #settings-btn")) return; // overlays keep focus here; tray hides the window
-  if (L && L.panels.length && !L.help && !L.settings) invoke("shortcut", { action: "refocus" }).catch(() => {});
+  if (e.target.closest("#help, #tray, #settings-btn, #capture")) return; // overlays keep focus here; tray hides the window; capture focuses the panel
+  if (L && L.panels.length && !L.help && !L.settings && !L.capture) invoke("shortcut", { action: "refocus" }).catch(() => {});
 });
 
 // Same mapping as src-tauri/src/panel.js, for when this UI has focus.
@@ -558,6 +562,7 @@ const hit = (b, e) =>
   e.shiftKey === b.shift && e.metaKey === b.meta;
 function keyOf(e) {
   if (!L) return null;
+  if (L.capture) return null; // capture.js handles keys in the preview
   for (const k of L.keys) if (hit(k.binding, e)) return { action: k.id };
   const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
   if (mod && !e.shiftKey && !e.altKey && /^Digit[1-9]$/.test(e.code)) {
@@ -575,7 +580,7 @@ window.addEventListener(
     const a = keyOf(e);
     if (!a) return;
     e.preventDefault();
-    if (e.repeat && ["bar", "help", "settings"].includes(a.action)) return;
+    if (e.repeat && ["bar", "help", "settings", "capture"].includes(a.action)) return;
     invoke("shortcut", a).catch(showError);
   },
   true,

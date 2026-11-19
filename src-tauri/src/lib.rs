@@ -6,6 +6,7 @@
 //!   WebView2 profile name, so all panels share one WebView2 runtime.
 
 mod keys;
+mod capture;
 mod layout;
 mod media;
 mod nav;
@@ -26,14 +27,14 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 pub(crate) const MAIN: &str = "main";
-const HOST: &str = "host";
+pub(crate) const HOST: &str = "host";
 const START_URL: &str = "https://x.com/home";
 /// Injected into every panel's main frame: reports focus and the app's own
 /// shortcuts. The panel capability lets x.com reach only those commands.
 /// `/*KEYS*/null` is replaced with the shortcut bindings at creation.
 const PANEL_JS: &str = include_str!("panel.js");
 
-struct AppState {
+pub(crate) struct AppState {
     settings: Mutex<Settings>,
     /// Account whose panel last had keyboard focus. Not persisted.
     active: Mutex<Option<Uuid>>,
@@ -41,6 +42,8 @@ struct AppState {
     help: Mutex<bool>,
     /// Settings screen open: panels are hidden the same way.
     settings_open: Mutex<bool>,
+    /// Capture preview open: panels are hidden the same way.
+    capture: Mutex<bool>,
     /// Global show/hide shortcut as registered (None: off or failed).
     hotkey: Mutex<Option<String>>,
     /// Why the shortcut isn't registered (start or last change attempt).
@@ -82,6 +85,8 @@ struct LayoutPayload {
     bar: bool,
     /// Shortcut overlay open.
     help: bool,
+    /// Capture preview open.
+    capture: bool,
     top: f64,
     gap: f64,
     min_panel: f64,
@@ -127,7 +132,7 @@ fn logical_size<R: Runtime>(window: &Window<R>) -> (f64, f64) {
 }
 
 /// Recompute every rect, move the webviews, tell the host UI.
-fn relayout<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_window(MAIN) else { return };
     let state = app.state::<AppState>();
     let s = state.settings.lock().unwrap().clone();
@@ -136,6 +141,7 @@ fn relayout<R: Runtime>(app: &AppHandle<R>) {
     let settings_open = *state.settings_open.lock().unwrap();
     let hotkey = state.hotkey.lock().unwrap().clone();
     let hotkey_error = state.hotkey_error.lock().unwrap().clone();
+    let capture = *state.capture.lock().unwrap();
     let (w, h) = logical_size(&window);
     let top = top_of(&s);
     let rects = layout::panels(w, h, top, &s.ratios);
@@ -153,9 +159,9 @@ fn relayout<R: Runtime>(app: &AppHandle<R>) {
                 position: LogicalPosition::new(r.x, r.y).into(),
                 size: LogicalSize::new(r.w, r.h).into(),
             });
-            // Native webviews sit above the host UI; the overlay can only
+            // Native webviews sit above the host UI; the overlays can only
             // show while they are hidden.
-            let _ = if help || settings_open { wv.hide() } else { wv.show() };
+            let _ = if help || settings_open || capture { wv.hide() } else { wv.show() };
         }
         panels.push(PanelView {
             id: acc.id.to_string(),
@@ -170,6 +176,7 @@ fn relayout<R: Runtime>(app: &AppHandle<R>) {
         win_h: h,
         bar: bar_visible(&s),
         help,
+        capture,
         top,
         gap: layout::GAP,
         min_panel: layout::MIN_PANEL,
@@ -201,6 +208,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
         .data_store_identifier(acc.store_id())
         .initialization_script(PANEL_JS.replace("/*KEYS*/null", keys_json))
         .initialization_script(media::SCRIPT)
+        .initialization_script(capture::SCRIPT)
         .on_navigation(move |url| match nav::decide(url) {
             nav::Decision::Allow => true,
             nav::Decision::OpenExternal => {
@@ -305,7 +313,8 @@ fn purge_pending_profiles(app: &tauri::App, s: &mut Settings) {
 }
 
 // ---------------------------------------------------------------- commands
-// Only the host webview has IPC (capabilities/host.json). Commands are async
+// The host webview may call these (capabilities/host.json); x.com panels only
+// panel_focused, shortcut and capture_posts (capabilities/panel.json). Commands are async
 // because add_child from a sync command deadlocks on WebView2.
 
 #[tauri::command]
@@ -347,7 +356,7 @@ async fn commit_layout(app: AppHandle, state: State<'_, AppState>, ratios: Vec<f
 
 /// Give keyboard focus to the panel of `id`, so X's own shortcuts (j/k/...)
 /// go there, and mark it active right away (its focus report follows).
-fn focus_account<R: Runtime>(app: &AppHandle<R>, id: Uuid) {
+pub(crate) fn focus_account<R: Runtime>(app: &AppHandle<R>, id: Uuid) {
     let state = app.state::<AppState>();
     let label = format!("panel-{}", id.simple());
     if let Some(wv) = app.get_webview(&label) {
@@ -393,9 +402,11 @@ async fn panel_focused(app: AppHandle, state: State<'_, AppState>, webview: Webv
 /// - `bar`: Ctrl/Cmd+Shift+H, show/hide the top bar
 /// - `help`: Ctrl/Cmd+/, open/close the shortcut overlay
 /// - `settings`: Ctrl/Cmd+, open/close the settings screen
-/// (keys of next/prev/bar/help/settings are configurable, see keys.rs)
+/// (keys of next/prev/bar/help/settings/capture are configurable, see keys.rs)
 /// - `refocus`: host UI was clicked, hand focus back to the active panel
 /// - `tray`: hide the window to the tray (top bar button)
+/// - `capture`: Ctrl/Cmd+Shift+S from the host UI or the top bar button:
+///   start picking posts in the active panel (capture.js)
 #[tauri::command]
 async fn shortcut(
     app: AppHandle,
@@ -439,11 +450,40 @@ fn set_overlay<R: Runtime>(app: &AppHandle<R>, state: &AppState, help: bool, set
 /// Tray menu "설정": open the settings screen (window already shown).
 pub(crate) fn open_settings<R: Runtime>(app: &AppHandle<R>) {
     let state = app.state::<AppState>();
+    capture::close(app, &state);
     set_overlay(app, &state, false, true);
 }
 
 fn run_shortcut(app: &AppHandle, state: &AppState, action: &str, index: Option<usize>) -> Result<(), String> {
     let app = app.clone();
+    // Capture preview open: the host UI handles its own keys; any app
+    // shortcut that still gets here closes it first.
+    if *state.capture.lock().unwrap() {
+        capture::close(&app, state);
+        if action == "capture" {
+            return Ok(());
+        }
+    }
+    if action == "capture" {
+        let was_help = std::mem::replace(&mut *state.help.lock().unwrap(), false);
+        let was_settings = std::mem::replace(&mut *state.settings_open.lock().unwrap(), false);
+        if was_settings {
+            tray::RECORDING.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        if was_help || was_settings {
+            relayout(&app);
+        }
+        let ids: Vec<Uuid> = state.settings.lock().unwrap().accounts.iter().map(|a| a.id).collect();
+        let active = *state.active.lock().unwrap();
+        let Some(id) = active.filter(|a| ids.contains(a)).or(ids.first().copied()) else {
+            return Ok(());
+        };
+        focus_account(&app, id);
+        if let Some(wv) = app.get_webview(&format!("panel-{}", id.simple())) {
+            let _ = wv.eval("window.dispatchEvent(new Event('paneful-capture'))");
+        }
+        return Ok(());
+    }
     if action == "help" {
         let open = !*state.help.lock().unwrap();
         set_overlay(&app, state, open, false);
@@ -755,6 +795,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // Folder picker in settings. Called from Rust only; no JS permission.
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(tray::on_shortcut)
@@ -791,6 +832,7 @@ pub fn run() {
                 settings_open: Mutex::new(false),
                 hotkey: Mutex::new(hotkey),
                 hotkey_error: Mutex::new(hotkey_error),
+                capture: Mutex::new(false),
                 path,
                 persist,
             };
@@ -863,7 +905,11 @@ pub fn run() {
             set_recording,
             pick_save_dir,
             reset_save_dir,
-            open_save_dir
+            open_save_dir,
+            capture::capture_posts,
+            capture::capture_close,
+            capture::capture_image,
+            capture::capture_export
         ])
         .run(tauri::generate_context!())
         .expect("error while running paneful");

@@ -13,6 +13,7 @@
     <div class="actions">
       <span id="status" role="alert" hidden></span>
       <button id="add" class="pill" title="계정 추가">＋ 계정</button>
+      <button id="capture" class="icon" data-icon="camera"></button>
       <button id="tray" class="icon" data-icon="eyeOff"></button>
       <button id="help" class="icon" data-icon="keyboard"></button>
       <button id="settings-btn" class="icon" data-icon="gear"></button>
@@ -47,7 +48,7 @@
       </div>
       <section>
         <h2>저장 폴더</h2>
-        <p class="hint">게시물 이미지·동영상 다운로드가 저장되는 곳<span id="save-default"> · 지금은 기본 폴더</span></p>
+        <p class="hint">이미지·동영상 다운과 게시물 캡쳐 PNG가 저장되는 곳<span id="save-default"> · 지금은 기본 폴더</span></p>
         <div class="dirrow">
           <code id="save-dir"></code>
           <button id="save-pick" class="pill">변경</button>
@@ -62,7 +63,21 @@
       </section>
       <p id="settings-msg" class="foot" role="status"></p>
     </div>
+  <div id="cap" hidden>
+    <div class="cap-head">
+      <h1>게시물 캡쳐</h1>
+      <span id="cap-info"></span>
+      <label class="check"><input type="checkbox" id="cap-anon" checked> 익명화</label>
+      <label class="check"><input type="checkbox" id="cap-time" checked> 시간</label>
+      <button id="cap-copy" class="pill">복사</button>
+      <button id="cap-save" class="pill">PNG 저장</button>
+      <button id="cap-both" class="pill primary">저장 + 복사</button>
+      <button id="cap-close" class="icon" data-icon="close"></button>
+    </div>
+    <p id="cap-msg" role="status"></p>
+    <div id="cap-view"></div>
   </div>
   <script src="app.js"></script>
+  <script src="capture.js"></script>
 </body>
 </html>

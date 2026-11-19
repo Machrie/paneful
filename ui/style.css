@@ -117,3 +117,17 @@ button.kcaps:hover { border-color: var(--line); background: var(--hover); }
 .kerr:empty { display: none; }
 .warn { color: var(--danger); }
 #settings-msg:empty { display: none; }
+/* ---- capture preview (panels are hidden while it is open) */
+#cap { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--bg); }
+.cap-head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line);
+  flex-wrap: wrap; }
+.cap-head h1 { font-size: 17px; margin-right: 4px; }
+#cap-info { color: var(--muted); flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.check { display: flex; align-items: center; gap: 4px; cursor: pointer; margin-right: 6px; }
+.check input { accent-color: var(--accent); margin: 0; }
+.pill.primary { background: var(--fg); color: var(--bg); border-color: transparent; }
+.pill.primary:hover { background: #d7dbdc; }
+#cap-msg { margin: 0; padding: 6px 16px; min-height: 28px; color: var(--muted); font-size: 12px; }
+#cap-msg.error { color: var(--danger); }
+#cap-view { flex: 1; overflow: auto; padding: 0 16px 24px; display: flex; flex-direction: column; align-items: center; }
+#cap-view canvas { display: block; max-width: 100%; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }

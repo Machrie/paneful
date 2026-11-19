@@ -19,6 +19,9 @@
     "allow-set-recording",
     "allow-pick-save-dir",
     "allow-reset-save-dir",
-    "allow-open-save-dir"
+    "allow-open-save-dir",
+    "allow-capture-close",
+    "allow-capture-image",
+    "allow-capture-export"
   ]
 }
