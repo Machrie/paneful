@@ -22,6 +22,9 @@
 (() => {
   if (window.top !== window) return;
   const mac = /Mac/.test(navigator.platform || navigator.userAgent);
+  // X screen selectors (rules.js, rules/x.v1.json).
+  const R = window[Symbol.for("paneful.rules")];
+  const S = (k) => R.sel(k);
   const call = (cmd, args) => {
     const t = window.__TAURI_INTERNALS__;
     return t ? t.invoke(cmd, args || {}) : Promise.reject();
@@ -208,7 +211,7 @@
     "mouseover",
     (e) => {
       const t = e.target;
-      if (t instanceof Element && !(ui && t === ui.host)) hovered = t.closest("article");
+      if (t instanceof Element && !(ui && t === ui.host)) hovered = t.closest(S("post"));
     },
     true,
   );
@@ -218,12 +221,12 @@
   });
   const postUrl = (art) => {
     if (!art || !art.isConnected) return null;
-    const t = art.querySelector('a[href*="/status/"] time');
+    const t = [...art.querySelectorAll(S("statusLink"))].map((l) => l.querySelector("time")).find(Boolean);
     const a = t && t.closest("a");
     return a && a.href ? a.href : null;
   };
   const target = () => {
-    const sel = document.activeElement && document.activeElement.closest ? document.activeElement.closest("article") : null;
+    const sel = document.activeElement && document.activeElement.closest ? document.activeElement.closest(S("post")) : null;
     return postUrl(hovered) || postUrl(sel) || location.href;
   };
   let choosing = null; // { url, targets } while asking which panel
@@ -335,7 +338,7 @@
   const BADGE = /^\d{1,4}\+?$/;
   const badgeIn = (a) => {
     if (!a) return "";
-    for (const el of a.querySelectorAll("div, span")) {
+    for (const el of a.querySelectorAll(S("badge"))) {
       if (el.childElementCount) continue;
       const t = (el.textContent || "").trim();
       if (BADGE.test(t)) return t;
@@ -343,10 +346,8 @@
     return "";
   };
   const readUnread = () => {
-    const nl = document.querySelector('a[data-testid="AppTabBar_Notifications_Link"], a[href="/notifications"][role="link"]');
-    const ml = document.querySelector(
-      'a[data-testid="AppTabBar_DirectMessage_Link"], a[href="/messages"][role="link"], a[href^="/i/chat"][role="link"]',
-    );
+    const nl = document.querySelector(S("notifLink"));
+    const ml = document.querySelector(S("dmLink"));
     let n = badgeIn(nl);
     if (!nl) {
       const m = /^\((\d{1,4}\+?)\)\s/.exec(document.title || "");

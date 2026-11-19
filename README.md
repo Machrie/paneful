@@ -216,6 +216,18 @@ GitHub [Releases](https://github.com/Machrie/paneful/releases)에 새 버전이 
 - 버튼 옆 **×**는 그 버전 건너뛰기. 그보다 새 버전이 나오면 다시 뜬다
 - [설정](#설정)의 **새 버전** 칸에서 자동 확인을 끄거나, **지금 확인**으로 바로 확인한다
 
+### X 화면 규칙 자동 받기
+
+다운 버튼, 게시물 캡쳐, 익명화, 알림 숫자, 다른 패널에서 열기는 X 화면에서 게시물·이름·아이디·프로필 사진·사진 칸·동영상·알림 배지를 찾는 규칙(CSS 선택자)에 기댄다. 이 규칙은 앱 코드가 아니라 저장소의 [`rules/x.v1.json`](rules/x.v1.json)에 있다. X가 화면을 바꿔서 기능이 깨지면 이 파일만 고치면 되고, 설치된 앱이 새 버전 없이 받아 쓴다.
+
+- 앱 시작 15초쯤 뒤에 한 번, 그 뒤로 6시간마다 GitHub에서 받는다. 쿠키·계정 정보는 안 보낸다
+- 받는 건 이름이 정해진 짧은 문자열(선택자)뿐이다. 코드로 실행되지 않는다. 형식이 틀리거나 이상한 글자가 있으면 파일째 버린다
+- 받기 실패, 거부, 오프라인이면 앱에 든 규칙이나 전에 받아 둔 규칙을 쓴다
+- 캡쳐는 규칙으로 작성자 이름·아이디·프로필 사진을 못 찾는 게시물이 있으면 찍지 않고 실패한다. 실명이 그대로 찍히는 걸 막기 위해서다
+- [설정](#설정)의 **X 화면 규칙** 칸에서 끄거나(끄면 앱에 든 규칙만 씀) **지금 확인**한다
+
+규칙 고치는 법: `rules/x.v1.json`에서 값을 고치고 `revision`을 1 올려 main에 넣는다. 앱은 지금 쓰는 것보다 `revision`이 큰 파일만 받는다. 앱이 못 읽는 형식으로 바꿔야 하면 `format`을 올린 `x.v2.json`을 새로 만들고, 옛 앱을 위해 `x.v1.json`은 남겨 둔다. 이름 목록은 `src-tauri/src/rules.rs`의 `SELECTORS`, `TEXTS`.
+
 ### 트레이로 숨기기
 
 - 상단 바의 **눈 가림** 버튼이나 전역 단축키로 창을 숨긴다. 숨기면 작업 표시줄·Alt+Tab(Windows), Dock·Cmd+Tab(macOS)에서도 사라지고 트레이(macOS는 메뉴 막대) 아이콘만 남는다
@@ -277,6 +289,7 @@ npx @tauri-apps/cli@2 build           # 설치 파일 (Windows: NSIS .exe, macOS
 - 패널 주입 스크립트
   - `src-tauri/src/panel.js`: 포커스 보고, 앱 단축키(`Ctrl+휠` 배율 포함), 입력창 밖 `Ctrl+V` 링크 열기, 알림·쪽지 배지 읽기만. `panel` capability로 `panel_focused`, `panel_unread`(숫자만, Rust가 형식 검사), `shortcut`, `panel_keys`(단축키 바인딩 읽기), `paste_link`(클립보드는 Rust가 읽고 링크 검사·정리는 `nav.rs`의 `x_link`, 이동은 안 함), `open_link`(사용자가 확인한 주소를 `x_link`로 다시 검사하고 이동), `send_link`(다른 패널에서 열기: 주소를 `x_link`로 검사하고 고른 패널을 이동)만 허용. 창을 트레이로 숨길 때 영상 정지도 여기서 한다
   - `src-tauri/src/links.js`: x.com 계열 밖 링크의 왼쪽 클릭을 x.com보다 먼저 받아 실제 주소로 `window.open`. `on_new_window`가 기본 브라우저로 보낸다(우클릭 > 새 창과 같은 경로)
+  - `src-tauri/src/rules.js` + `rules.rs` + `rules/x.v1.json`: X 화면 규칙(선택자). Rust가 받고 검증·캐시하고, `rules.js`가 `panel.js`·`media.js`·`capture.js`에 넘긴다. 패널은 `panel_rules`로 읽기만 한다
   - `src-tauri/src/media.js` + `media.rs`: 원본 저장 버튼. 패널엔 IPC 없이 `window.open` 트리거를 `on_new_window`가 가로채고, Rust가 twimg 주소를 검증한 뒤 쿠키 없이 받는다
   - `src-tauri/src/capture.js` + `capture.rs` + `snap.rs` + `ui/capture.js`: 게시물 캡쳐. 패널 스크립트가 범위를 스크롤하며 X의 고정 바를 숨기고, 자기 섀도 루트에 가림막(익명N)을 깔아 패널을 찍는다(원본 한 번, 가린 것 한 번). 스크린샷은 `snap.rs`가 OS 기능으로 찍는다(Windows `CapturePreview`, macOS `takeSnapshot`). Rust는 게시물 사각형만 잘라 두었다가 이어 붙이고, 미리보기·저장(`png`)·복사(`tauri-plugin-clipboard-manager`)를 맡는다. 찍기 전후로 위치를 재서 움직였으면 그 장면은 버린다
 

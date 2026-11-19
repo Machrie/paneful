@@ -28,6 +28,9 @@
   const STATUS_RE = /^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)/;
   const HANDLE_RE = /^@([A-Za-z0-9_]{1,15})$/;
   const MENTION_RE = /(^|[^A-Za-z0-9_@])@([A-Za-z0-9_]{1,15})(?![A-Za-z0-9_])/g;
+  // Selectors come from the X screen rules (rules.js, rules/x.v1.json).
+  const R = window[Symbol.for("paneful.rules")];
+  const S = (k) => R.sel(k);
   const ANON = ["#1d9bf0", "#f91880", "#00ba7c", "#ffad1f", "#7856ff", "#ff7a00", "#e0245e", "#17bf63", "#8b98a5"];
 
   const call = (cmd, args) => {
@@ -37,7 +40,7 @@
   };
 
   // ------------------------------------------------ reading posts
-  const isEmoji = (img) => /\/emoji\//.test(img.src || "");
+  const isEmoji = (img) => (img.src || "").includes(R.text("emojiPath"));
 
   // Visible text of an element, emoji as their alt text.
   function textOf(root) {
@@ -70,9 +73,9 @@
   }
 
   function quoteBoxOf(article) {
-    const names = article.querySelectorAll('[data-testid="User-Name"]');
+    const names = article.querySelectorAll(S("userName"));
     for (let i = 1; i < names.length; i++) {
-      const box = names[i].closest('div[role="link"]');
+      const box = names[i].closest(S("quoteBox"));
       if (box && article.contains(box)) return box;
     }
     return null;
@@ -84,8 +87,8 @@
       const m = a && STATUS_RE.exec(new URL(a.href, location.href).pathname);
       if (m) return m[2];
     }
-    const un = article.querySelector('[data-testid="User-Name"]');
-    const tt = article.querySelector('[data-testid="tweetText"]');
+    const un = article.querySelector(S("userName"));
+    const tt = article.querySelector(S("postText"));
     return "k:" + (un ? textOf(un) : "") + ":" + (tt ? textOf(tt).slice(0, 80) : "");
   }
 
@@ -93,31 +96,44 @@
   function partsOf(article) {
     const qbox = quoteBoxOf(article);
     const inQuote = (el) => !!(qbox && qbox.contains(el));
-    const names = [...article.querySelectorAll('[data-testid="User-Name"]')];
+    const names = [...article.querySelectorAll(S("userName"))];
     const un = names.find((u) => !inQuote(u));
     const qun = qbox && names.find((u) => inQuote(u));
     const avatarOf = (root, skip) =>
-      [...root.querySelectorAll('[data-testid="Tweet-User-Avatar"]')].find((a) => !skip || !skip(a)) ||
-      [...root.querySelectorAll("img")].find((i) => /\/profile_images\//.test(i.src || "") && (!skip || !skip(i)));
+      [...root.querySelectorAll(S("avatar"))].find((a) => !skip || !skip(a)) ||
+      [...root.querySelectorAll("img")].find((i) => (i.src || "").includes(R.text("avatarPath")) && (!skip || !skip(i)));
     return {
+      qbox,
       author: un ? who(un) : null,
       avatar: avatarOf(article, inQuote),
       quote: qun ? who(qun) : null,
       qavatar: qbox ? avatarOf(qbox) : null,
-      texts: [...article.querySelectorAll('[data-testid="tweetText"]')],
-      social: [...article.querySelectorAll('[data-testid="socialContext"]')],
+      texts: [...article.querySelectorAll(S("postText"))],
+      social: [...article.querySelectorAll(S("socialContext"))],
       // @handle links outside the name lines: text mentions, "Replying to @x"
       mentions: [...article.querySelectorAll("a")].filter(
-        (a) => !a.closest('[data-testid="User-Name"]') && HANDLE_RE.test((a.textContent || "").trim()),
+        (a) => !a.closest(S("userName")) && HANDLE_RE.test((a.textContent || "").trim()),
       ),
     };
   }
 
+  // The masks are only as good as the X screen rules. A post whose author
+  // line, @handle or avatar the rules don't find would come out with the
+  // real person in it, so the capture stops instead of shooting it.
+  function mustMask(p) {
+    const ok = (w, avatar) => w && w.handle && w.handleEl && avatar;
+    if (!ok(p.author, p.avatar) || (p.quote && !ok(p.quote, p.qavatar)) || (p.qbox && !p.quote)) {
+      throw new Error("익명화할 작성자를 못 찾았다 (X 화면이 바뀐 듯). 설정 > X 화면 규칙에서 지금 확인");
+    }
+    return p;
+  }
+
   function articles() {
-    let list = document.querySelectorAll('[data-testid="primaryColumn"] article[data-testid="tweet"]');
-    if (!list.length) list = document.querySelectorAll('article[data-testid="tweet"]');
+    const col = document.querySelector(S("column"));
+    let list = col ? col.querySelectorAll(S("post")) : [];
+    if (!list.length) list = document.querySelectorAll(S("post"));
     return [...list]
-      .filter((a) => !a.closest('[aria-modal="true"]'))
+      .filter((a) => !a.closest(S("modal")))
       .map((a) => ({ a, top: a.getBoundingClientRect().top }))
       .sort((x, y) => x.top - y.top)
       .map((x) => x.a);
@@ -144,7 +160,7 @@
   }
 
   function scanPeople(P, article) {
-    const p = partsOf(article);
+    const p = mustMask(partsOf(article));
     if (p.author) P.add(p.author.handle, p.author.name);
     if (p.quote) P.add(p.quote.handle, p.quote.name);
     for (const a of p.mentions) P.add(HANDLE_RE.exec(a.textContent.trim())[1]);
@@ -205,7 +221,7 @@
   const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
   function masksFor(article, P) {
-    const p = partsOf(article);
+    const p = mustMask(partsOf(article));
     const out = [];
     const person = (w, avatar) => {
       if (!w) return;
@@ -355,7 +371,7 @@
             if (hidden.has(e)) break;
             const pos = getComputedStyle(e).position;
             if (pos !== "fixed" && pos !== "sticky") continue;
-            if (e.querySelector('article[data-testid="tweet"]')) break;
+            if (e.querySelector(S("post"))) break;
             hidden.set(e, e.style.visibility);
             e.style.visibility = "hidden";
             break;
@@ -404,7 +420,7 @@
     }
   }
 
-  const articleAt = (t) => (t instanceof Element ? t.closest('article[data-testid="tweet"]') : null);
+  const articleAt = (t) => (t instanceof Element ? t.closest(S("post")) : null);
   const absY = (a) => a.getBoundingClientRect().top + window.scrollY;
   const findByKey = (key) => articles().find((a) => keyOf(a) === key);
 

@@ -13,6 +13,7 @@ mod health;
 mod media;
 mod memory;
 mod nav;
+mod rules;
 mod portable;
 mod settings;
 mod tray;
@@ -42,6 +43,9 @@ const START_URL: &str = "https://x.com/home";
 const PANEL_JS: &str = include_str!("panel.js");
 /// Left click on an off-site link -> window.open with the real address.
 const LINKS_JS: &str = include_str!("links.js");
+/// X screen rules (rules.rs) for media.js / capture.js. `/*BUILTIN*/null`
+/// and `/*RULES*/null` are replaced with JSON data at creation.
+const RULES_JS: &str = include_str!("rules.js");
 
 pub(crate) struct AppState {
     settings: Mutex<Settings>,
@@ -65,6 +69,9 @@ pub(crate) struct AppState {
     hotkey_error: Mutex<Option<String>>,
     /// Last new version check (update.rs).
     update: Mutex<update::Status>,
+    /// X screen rules in effect, and the last download check (rules.rs).
+    rules: Mutex<rules::Rules>,
+    rules_status: Mutex<rules::Status>,
     /// Unread counts per account as its panel shows them (unread.rs).
     /// Only accounts with something unread are in here. Not persisted.
     unread: Mutex<BTreeMap<Uuid, unread::Unread>>,
@@ -146,6 +153,10 @@ struct LayoutPayload {
     update: update::Status,
     /// Version the user skipped.
     skip_version: Option<String>,
+    /// Download X screen rule fixes from the repository.
+    rules_update: bool,
+    /// Rules in effect and the last check, for the settings screen.
+    rules: rules::Status,
 }
 
 /// Bar is forced on with no accounts, otherwise "+ 계정" would be unreachable
@@ -194,6 +205,10 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
     };
     let hidden = *state.hidden.lock().unwrap();
     let up = state.update.lock().unwrap().clone();
+    let rules_st = {
+        let st = state.rules_status.lock().unwrap().clone();
+        rules::status_of(&state.rules.lock().unwrap(), &st)
+    };
     let unread = state.unread.lock().unwrap().clone();
     let (w, h) = logical_size(&window);
     let top = top_of(&s);
@@ -268,6 +283,8 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
         update_notice: update::notice(&s, &up),
         update: up,
         skip_version: s.skip_version.clone(),
+        rules_update: s.rules_update,
+        rules: rules_st,
     };
     let _ = app.emit_to(HOST, "layout", payload);
 }
@@ -279,12 +296,20 @@ fn bindings_json(s: &Settings) -> String {
 
 fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, keys_json: &str) -> tauri::Result<()> {
     let app = window.app_handle().clone();
+    let rules_js = {
+        let state = app.state::<AppState>();
+        let cur = state.rules.lock().unwrap();
+        RULES_JS
+            .replace("/*BUILTIN*/null", &rules::json(&rules::builtin()))
+            .replace("/*RULES*/null", &rules::json(&cur))
+    };
     let app2 = app.clone();
     let label = panel_label(acc);
     let label2 = label.clone();
 
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(START_URL.parse().unwrap()))
         .data_store_identifier(acc.store_id())
+        .initialization_script(rules_js)
         .initialization_script(PANEL_JS.replace("/*KEYS*/null", keys_json))
         .initialization_script(media::SCRIPT)
         .initialization_script(capture::SCRIPT)
@@ -1346,6 +1371,33 @@ async fn skip_update(app: AppHandle, state: State<'_, AppState>, undo: Option<bo
     Ok(())
 }
 
+/// X screen rules in effect. rules.js asks on every page load and on the
+/// `paneful-rules` event. Data only (selectors and URL fragments).
+#[tauri::command]
+async fn panel_rules(state: State<'_, AppState>) -> Result<rules::Rules, String> {
+    Ok(state.rules.lock().unwrap().clone())
+}
+
+/// "지금 확인" for the X screen rules.
+#[tauri::command]
+async fn check_rules(app: AppHandle) {
+    rules::check(&app, true).await;
+}
+
+/// Settings checkbox: download rule fixes at all. Off = built-in rules.
+#[tauri::command]
+async fn set_rules_update(app: AppHandle, state: State<'_, AppState>, on: bool) -> Result<(), String> {
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        s.rules_update = on;
+        s.clone()
+    };
+    state.save(&snapshot);
+    rules::set_enabled(&app, on);
+    relayout(&app);
+    Ok(())
+}
+
 /// Release page in the system browser.
 #[tauri::command]
 async fn open_update(app: AppHandle) -> Result<(), String> {
@@ -1429,6 +1481,8 @@ pub fn run() {
                 zoom: Mutex::new(false),
                 hidden: Mutex::new(false),
                 update: Mutex::new(update::Status::default()),
+                rules: Mutex::new(rules::initial(app.handle(), s.rules_update)),
+                rules_status: Mutex::new(rules::Status::default()),
                 unread: Mutex::new(BTreeMap::new()),
                 path,
                 persist,
@@ -1458,6 +1512,8 @@ pub fn run() {
             }
             // New version check, off the main thread (update.rs).
             update::spawn(app.handle());
+            // X screen rule fixes, same way (rules.rs).
+            rules::spawn(app.handle());
 
             // Host UI first so the panels stack above it; it stays visible
             // in the top bar and in the gaps between panels.
@@ -1528,7 +1584,10 @@ pub fn run() {
             check_update,
             set_update_check,
             skip_update,
-            open_update
+            open_update,
+            panel_rules,
+            check_rules,
+            set_rules_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running paneful");

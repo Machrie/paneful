@@ -12,6 +12,9 @@
   Object.defineProperty(window, "__panefulMedia", { value: true });
 
   const TRIGGER = "https://paneful.invalid/save-media";
+  // Selectors come from the X screen rules (rules.js, rules/x.v1.json).
+  const R = window[Symbol.for("paneful.rules")];
+  const S = (k) => R.sel(k);
   const IMG_RE = /^https:\/\/pbs\.twimg\.com\/media\//;
   const POSTER_RE = /\/(?:ext_tw_video_thumb|amplify_video_thumb)\/(\d+)\//;
   const GIF_POSTER_RE = /\/tweet_video_thumb\/([A-Za-z0-9_-]+)\./;
@@ -95,12 +98,12 @@
   // or the photo under the pointer in the photo viewer. Avatars, emoji, link
   // cards and the rest of the post never match.
   function imageOf(el, x, y) {
-    const box = el.closest('[data-testid="tweetPhoto"]');
+    const box = el.closest(S("photo"));
     if (box) {
       const img = box.querySelector("img");
       return img && IMG_RE.test(img.src) ? { box, src: img.src } : null;
     }
-    const modal = el.closest('[aria-modal="true"]');
+    const modal = el.closest(S("modal"));
     if (!modal || x == null) return null;
     for (const img of modal.querySelectorAll("img")) {
       if (!IMG_RE.test(img.src)) continue;
@@ -113,7 +116,7 @@
   }
 
   function videoOf(el) {
-    const box = el.closest('[data-testid="videoPlayer"], [data-testid="videoComponent"]');
+    const box = el.closest(S("video"));
     if (!box) return null;
     const v = box.querySelector("video");
     if (!v) return null;
@@ -124,15 +127,15 @@
   }
 
   function statusOf(box) {
-    const own = box.closest('a[href*="/status/"]');
+    const own = box.closest(S("statusLink"));
     let m = own && STATUS_RE.exec(new URL(own.href).pathname);
     if (m) return m;
-    if (box.closest('[aria-modal="true"]')) {
+    if (box.closest(S("modal"))) {
       m = STATUS_RE.exec(location.pathname);
       if (m) return m;
     }
-    const art = box.closest("article");
-    const t = art && art.querySelector('a[href*="/status/"] time');
+    const art = box.closest(S("post"));
+    const t = art && [...art.querySelectorAll(S("statusLink"))].map((a) => a.querySelector("time")).find(Boolean);
     const a = t && t.closest("a");
     return a ? STATUS_RE.exec(new URL(a.href).pathname) : STATUS_RE.exec(location.pathname);
   }
@@ -265,7 +268,7 @@
   document.addEventListener(
     "mousemove",
     (e) => {
-      if (!e.target.closest || !e.target.closest('[aria-modal="true"]')) return;
+      if (!e.target.closest || !e.target.closest(S("modal"))) return;
       if (moveQueued) return void (moveQueued = e);
       moveQueued = e;
       requestAnimationFrame(() => {

@@ -30,6 +30,8 @@
     "allow-check-update",
     "allow-set-update-check",
     "allow-skip-update",
-    "allow-open-update"
+    "allow-open-update",
+    "allow-check-rules",
+    "allow-set-rules-update"
   ]
 }

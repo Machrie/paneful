@@ -17,6 +17,10 @@
 //! and the settings screen shows the last one per panel (`last`).
 //! The lock here is never held while touching a webview.
 
+// The detection hooks exist only on Windows and macOS; on other targets
+// (Linux dev builds) the reporting half has no caller.
+#![cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+
 use serde::Serialize;
 use std::{
     collections::HashMap,
