@@ -32,6 +32,8 @@ tauri-plugin-log = "2"
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "http2"] }
 # Show/hide toggle that works while another app has focus.
 tauri-plugin-global-shortcut = "2"
+# Folder picker for the save folder in settings (used from Rust only).
+tauri-plugin-dialog = "2"
 
 [target.'cfg(windows)'.dependencies]
 # Same versions tauri-runtime-wry 2.12.5 uses; only for the M0 profile check.

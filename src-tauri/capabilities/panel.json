@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "panel",
-  "description": "x.com panels: only the focus report and the app shortcuts (switch panel, show/hide top bar). No core permissions, no account or layout commands.",
+  "description": "x.com panels: only the focus report, the app shortcuts (switch panel, show/hide top bar, ...) and reading their key bindings. No core permissions, no account, layout or settings commands.",
   "webviews": [
     "panel-*"
   ],
@@ -12,6 +12,7 @@
   },
   "permissions": [
     "allow-panel-focused",
-    "allow-shortcut"
+    "allow-shortcut",
+    "allow-panel-keys"
   ]
 }

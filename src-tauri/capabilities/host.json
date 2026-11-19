@@ -13,6 +13,12 @@
     "allow-reload-panel",
     "allow-add-account",
     "allow-remove-account",
-    "allow-shortcut"
+    "allow-shortcut",
+    "allow-panel-keys",
+    "allow-set-key",
+    "allow-set-recording",
+    "allow-pick-save-dir",
+    "allow-reset-save-dir",
+    "allow-open-save-dir"
   ]
 }

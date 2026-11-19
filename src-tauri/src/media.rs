@@ -5,7 +5,7 @@
 //! click on it calls `window.open(TRIGGER?...)`; panels have no IPC, so the
 //! panel's `on_new_window` handler catches that URL, denies the window and
 //! hands it to `handle`. Rust then downloads exactly that one file into
-//! `<Downloads>/Paneful` and reports back to the panel with a DOM event.
+//! the save folder (settings, default `<Downloads>/Paneful`) and reports back to the panel with a DOM event.
 //!
 //! Only `pbs.twimg.com/media/...` and `video.twimg.com/...mp4` are accepted,
 //! so a page that opens the trigger URL itself can at most save one public
@@ -240,6 +240,21 @@ fn report<R: Runtime>(app: &AppHandle<R>, label: &str, src: &str, ok: bool, mess
     ));
 }
 
+/// `<Downloads>/Paneful`, used when no folder is set in settings.
+pub fn default_save_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    app.path().download_dir().map(|d| d.join("Paneful")).map_err(|e| e.to_string())
+}
+
+/// Folder for media and captures: the one set in settings, else the default.
+/// Only reads settings (short lock, no window calls under it).
+pub fn save_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let custom = app.state::<crate::AppState>().settings.lock().unwrap().save_dir.clone();
+    match custom.filter(|d| !d.trim().is_empty()) {
+        Some(d) => Ok(PathBuf::from(d)),
+        None => default_save_dir(app),
+    }
+}
+
 /// Called from the panel's `on_new_window` for a trigger URL.
 pub fn handle<R: Runtime>(app: AppHandle<R>, label: String, url: Url) {
     let src = query(&url, "src").map(|s| s.into_owned()).unwrap_or_default();
@@ -255,9 +270,9 @@ pub fn handle<R: Runtime>(app: AppHandle<R>, label: String, url: Url) {
         return; // same file already downloading: ignore double clicks
     }
     tauri::async_runtime::spawn(async move {
-        let res = match app.path().download_dir() {
-            Ok(d) => download(d.join("Paneful"), &req).await,
-            Err(e) => Err(e.to_string()),
+        let res = match save_dir(&app) {
+            Ok(d) => download(d, &req).await,
+            Err(e) => Err(e),
         };
         in_flight().lock().unwrap().remove(&req.url);
         match res {

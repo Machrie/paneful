@@ -2,7 +2,8 @@
 // Panels are native child webviews, so this page only shows through above
 // the panels (top bar, or a thin strip while the bar is hidden) and in the
 // gaps between panels; the gaps are the drag handles. The shortcut overlay
-// is drawn here too, while Rust keeps the panels hidden.
+// and the settings screen are drawn here too, while Rust keeps the panels
+// hidden.
 // No confirm()/alert(): wry's macOS UI delegate doesn't implement them
 // (confirm() always returns false there), so everything is inline.
 const { invoke } = window.__TAURI__.core;
@@ -15,13 +16,17 @@ const statusEl = $("status");
 const barEl = $("bar");
 const stripEl = $("strip");
 const overlayEl = $("overlay");
+const settingsEl = $("settings");
 
 const mac = /Mac/.test(navigator.platform || navigator.userAgent);
 const MOD = mac ? "⌘" : "Ctrl";
 
 let L = null; // last layout payload from Rust
 let shape = ""; // panel ids/labels/colors the DOM was built for
-let hotkeyShown = false; // global shortcut added to the overlay / tooltips
+let hotkeyErrorShown = false; // start-up hotkey error toasted once
+let keysShape = ""; // shortcut set the overlay / settings rows were built for
+let rec = null; // settings: shortcut waiting for a key press {id, btn}
+const rowErrs = {}; // settings: last error per shortcut, kept across rebuilds
 
 // Static, trusted markup only.
 const ICONS = {
@@ -31,15 +36,29 @@ const ICONS = {
   chevronUp: '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>',
   eyeOff: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c5 0 9 4.5 10 7a13 13 0 0 1-2.9 3.9M6.6 6.6C4.3 8 2.6 10.2 2 12c1 2.5 5 7 10 7a9.6 9.6 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  gear: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
 };
 function setIcon(el, name) {
   el.innerHTML = ICONS[name];
 }
 document.querySelectorAll("[data-icon]").forEach((el) => setIcon(el, el.dataset.icon));
-$("help").title = `단축키 (${MOD}+/)`;
-$("hide").title = `상단 바 숨기기 (${MOD}+Shift+H)`;
-$("tray").title = "창을 트레이로 숨기기";
-stripEl.title = `클릭 또는 ${MOD}+Shift+H: 상단 바 표시 · ${MOD}+/: 단축키`;
+// Button tooltips name the configured keys, so they follow the layout.
+const keyText = (id) => {
+  const k = L && L.keys.find((v) => v.id === id);
+  return k && k.caps.length ? k.caps.join("+") : "";
+};
+const withKey = (text, k) => (k ? `${text} (${k})` : text);
+function updateTitles() {
+  $("help").title = withKey("단축키", keyText("help"));
+  $("settings-btn").title = withKey("설정", keyText("settings"));
+  $("hide").title = withKey("상단 바 숨기기", keyText("bar"));
+  $("tray").title = withKey("창을 트레이로 숨기기", L.hotkey.join("+"));
+  const bar = keyText("bar");
+  const help = keyText("help");
+  stripEl.title = [`클릭${bar ? ` 또는 ${bar}` : ""}: 상단 바 표시`, help && `${help}: 단축키`]
+    .filter(Boolean)
+    .join(" · ");
+}
 
 function showError(e) {
   statusEl.textContent = String(e);
@@ -73,11 +92,20 @@ function render() {
   barEl.hidden = !L.bar;
   stripEl.hidden = L.bar;
   overlayEl.hidden = !L.help;
+  settingsEl.hidden = !L.settings;
+  if (!L.settings && rec) stopRec();
   document.documentElement.style.setProperty("--top", `${L.top}px`);
   const s = L.panels.map((p) => `${p.id}\u0000${p.label}\u0000${p.color}`).join("\u0001");
-  if (!hotkeyShown) {
-    hotkeyShown = true;
-    showHotkey();
+  const ks = JSON.stringify([L.keys, L.global, L.hotkey, L.hotkey_error, L.save_dir]);
+  if (ks !== keysShape && !rec) {
+    keysShape = ks;
+    buildKeys();
+    buildSettings();
+    updateTitles();
+  }
+  if (!hotkeyErrorShown) {
+    hotkeyErrorShown = true;
+    if (L.hotkey_error) showError(L.hotkey_error);
   }
   if (s !== shape) {
     shape = s;
@@ -246,14 +274,14 @@ function startDrag(e, el, i) {
 }
 
 // ---- shortcut overlay
-// App shortcuts: same mapping as keyOf() below and src-tauri/src/panel.js.
-const APP_KEYS = [
-  [[MOD, "1–9"], "N번째 패널로 포커스"],
-  [["Ctrl", "Tab"], "다음 패널"],
-  [["Ctrl", "Shift", "Tab"], "이전 패널"],
-  [[MOD, "Shift", "H"], "상단 바 보이기/숨기기"],
-  [[MOD, "/"], "이 단축키 창"],
-];
+const KEY_LABELS = {
+  global: "창 숨기기/불러오기 (전역)",
+  next: "다음 패널",
+  prev: "이전 패널",
+  bar: "상단 바 보이기/숨기기",
+  help: "이 단축키 창",
+  settings: "설정",
+};
 // X's own shortcuts, only the ones that agree across several public lists
 // (X has no current official page for them). Work in the focused panel.
 // `then` = press one key, release, then the next (g then h).
@@ -297,23 +325,24 @@ function fillKeys(dl, rows) {
     dl.append(dt, dd);
   }
 }
-fillKeys($("app-keys"), APP_KEYS);
-// Global show/hide shortcut: comes from settings.json via Rust, so it is
-// added on the first layout. Works from any app, not only in Paneful.
-function showHotkey() {
+// Paneful's own shortcuts come from settings via Rust, so the list is
+// rebuilt whenever they change. Turned-off ones are left out.
+function buildKeys() {
   const dl = $("app-keys");
+  dl.replaceChildren();
+  const rows = [[[MOD, "1–9"], "N번째 패널로 포커스"]];
+  for (const k of L.keys) if (k.caps.length) rows.push([k.caps, KEY_LABELS[k.id]]);
+  fillKeys(dl, rows);
   if (L.hotkey.length) {
-    fillKeys(dl, [[L.hotkey, "창 숨기기/불러오기 (전역)"]]);
-    $("tray").title = `창을 트레이로 숨기기 (${L.hotkey.join("+")})`;
+    fillKeys(dl, [[L.hotkey, KEY_LABELS.global]]);
   } else {
     const dt = document.createElement("dt");
     dt.textContent = "전역 단축키";
     const dd = document.createElement("dd");
     dd.className = "warn";
-    dd.textContent = L.hotkey_error || "꺼짐 (settings.json)";
+    dd.textContent = L.hotkey_error || "꺼짐 (설정에서 켜기)";
     dl.append(dt, dd);
   }
-  if (L.hotkey_error) showError(L.hotkey_error);
 }
 fillKeys($("x-keys"), X_KEYS);
 const toggleHelp = () => invoke("shortcut", { action: "help" }).catch(showError);
@@ -327,6 +356,187 @@ overlayEl.addEventListener("click", (e) => {
   if (e.target === overlayEl) toggleHelp();
 });
 
+// ---- settings screen
+const toggleSettings = () => invoke("shortcut", { action: "settings" }).catch(showError);
+$("settings-btn").onclick = toggleSettings;
+$("settings-close").onclick = (e) => {
+  e.stopPropagation();
+  toggleSettings();
+};
+settingsEl.addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (e.target === settingsEl && !rec) toggleSettings();
+});
+
+function settingsMsg(text, bad) {
+  const m = $("settings-msg");
+  m.textContent = text || "";
+  m.classList.toggle("warn", !!bad);
+}
+
+$("save-pick").onclick = async () => {
+  try {
+    if (await invoke("pick_save_dir")) settingsMsg("저장 폴더 바뀜");
+  } catch (e) {
+    settingsMsg(e, true);
+  }
+};
+$("save-open").onclick = () => invoke("open_save_dir").catch((e) => settingsMsg(e, true));
+$("save-reset").onclick = () =>
+  invoke("reset_save_dir").then(() => settingsMsg("기본 폴더로 되돌림"), (e) => settingsMsg(e, true));
+
+function buildSettings() {
+  $("save-dir").textContent = L.save_dir || "(다운로드 폴더를 찾지 못함)";
+  $("save-dir").title = L.save_dir;
+  $("save-reset").disabled = L.save_dir_default;
+  $("save-default").hidden = !L.save_dir_default;
+
+  const box = $("key-rows");
+  box.replaceChildren();
+  const views = [L.global, ...L.keys];
+  for (const v of views) box.append(keyRow(v));
+  // Fixed one, for reference.
+  const row = document.createElement("div");
+  row.className = "keyrow";
+  const name = document.createElement("span");
+  name.className = "kname";
+  name.textContent = "N번째 패널로 포커스";
+  const caps = document.createElement("span");
+  caps.className = "kcaps fixed";
+  caps.append(kbds([MOD, "1–9"]));
+  const note = document.createElement("span");
+  note.className = "knote";
+  note.textContent = "고정";
+  row.append(name, caps, note);
+  box.append(row);
+}
+
+function kbds(keys) {
+  const f = document.createDocumentFragment();
+  keys.forEach((k) => {
+    const kbd = document.createElement("kbd");
+    kbd.textContent = k;
+    f.append(kbd);
+  });
+  return f;
+}
+
+function keyRow(v) {
+  const row = document.createElement("div");
+  row.className = "keyrow";
+  const name = document.createElement("span");
+  name.className = "kname";
+  name.textContent = KEY_LABELS[v.id];
+  if (v.id === "global") {
+    const sub = document.createElement("span");
+    sub.className = "sub";
+    sub.textContent = "다른 앱에서도";
+    name.append(sub);
+  }
+  const btn = document.createElement("button");
+  btn.className = "kcaps";
+  btn.title = "눌러서 새 키 입력";
+  const show = () => {
+    btn.replaceChildren();
+    if (v.caps.length) btn.append(kbds(v.caps));
+    else btn.textContent = "꺼짐";
+    btn.classList.toggle("off", !v.caps.length);
+  };
+  show();
+  btn.onclick = () => startRec(v.id, btn, show);
+  const def = pill("기본값", () => setKey(v.id, null));
+  def.disabled = v.is_default;
+  def.title = `기본값: ${v.default_caps.join("+")}`;
+  const off = pill("끄기", () => setKey(v.id, ""));
+  off.disabled = !v.caps.length;
+  const err = document.createElement("span");
+  err.className = "kerr warn";
+  err.dataset.id = v.id;
+  err.textContent = rowErrs[v.id] || (v.id === "global" && L.hotkey_error) || "";
+  row.append(name, btn, def, off, err);
+  return row;
+}
+
+function rowError(id, text) {
+  if (text) rowErrs[id] = text;
+  else delete rowErrs[id];
+  const el = document.querySelector(`.kerr[data-id="${id}"]`);
+  if (el) el.textContent = text || "";
+}
+
+async function setKey(id, accel) {
+  rowError(id, "");
+  settingsMsg("");
+  try {
+    await invoke("set_key", { id, accel });
+    settingsMsg(`"${KEY_LABELS[id]}" 바뀜`);
+  } catch (e) {
+    rowError(id, String(e));
+  }
+}
+
+function startRec(id, btn, restore) {
+  if (rec) stopRec();
+  rec = { id, btn, restore };
+  btn.classList.add("rec");
+  btn.replaceChildren();
+  btn.textContent = "키 조합을 누르기 (Esc 취소)";
+  rowError(id, "");
+  invoke("set_recording", { on: true }).catch(() => {});
+}
+
+function stopRec() {
+  if (!rec) return;
+  rec.btn.classList.remove("rec");
+  rec.restore();
+  rec = null;
+  invoke("set_recording", { on: false }).catch(() => {});
+  // Changes that arrived while recording.
+  if (L) render();
+}
+
+// KeyboardEvent -> accelerator string the Rust side parses.
+function accelOf(e) {
+  const p = [];
+  if (mac) {
+    if (e.ctrlKey) p.push("Control");
+    if (e.altKey) p.push("Alt");
+    if (e.shiftKey) p.push("Shift");
+    if (e.metaKey) p.push("CommandOrControl");
+  } else {
+    if (e.ctrlKey) p.push("CommandOrControl");
+    if (e.altKey) p.push("Alt");
+    if (e.shiftKey) p.push("Shift");
+    if (e.metaKey) p.push("Super");
+  }
+  let k = e.code;
+  if (/^Key[A-Z]$/.test(k)) k = k.slice(3);
+  else if (/^Digit[0-9]$/.test(k)) k = k.slice(5);
+  p.push(k);
+  return p.join("+");
+}
+
+// Runs before the app shortcut handler below (registered first).
+window.addEventListener(
+  "keydown",
+  (e) => {
+    if (!rec) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.repeat) return;
+    if (/^(Control|Shift|Alt|Meta|OS)(Left|Right)?$/.test(e.code) || !e.code) return; // modifier alone
+    const { id } = rec;
+    if (e.code === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+      stopRec();
+      return;
+    }
+    const accel = accelOf(e);
+    stopRec();
+    setKey(id, accel);
+  },
+  true,
+);
+
 $("add").onclick = () => invoke("add_account").catch(showError);
 $("tray").onclick = () => invoke("shortcut", { action: "tray" }).catch(showError);
 const toggleBar = () => invoke("shortcut", { action: "bar" }).catch(showError);
@@ -337,22 +547,26 @@ stripEl.onclick = toggleBar;
 // shortcuts keep working without clicking back into it. Runs after the
 // button handlers (bubble phase on document).
 document.addEventListener("click", (e) => {
-  if (e.target.closest("#help, #tray")) return; // overlay keeps focus here; tray hides the window
-  if (L && L.panels.length && !L.help) invoke("shortcut", { action: "refocus" }).catch(() => {});
+  if (e.target.closest("#help, #tray, #settings-btn")) return; // overlays keep focus here; tray hides the window
+  if (L && L.panels.length && !L.help && !L.settings) invoke("shortcut", { action: "refocus" }).catch(() => {});
 });
 
 // Same mapping as src-tauri/src/panel.js, for when this UI has focus.
 // e.code, not e.key: stays the same under the Korean IME.
+const hit = (b, e) =>
+  b && e.code === b.code && e.ctrlKey === b.ctrl && e.altKey === b.alt &&
+  e.shiftKey === b.shift && e.metaKey === b.meta;
 function keyOf(e) {
+  if (!L) return null;
+  for (const k of L.keys) if (hit(k.binding, e)) return { action: k.id };
   const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
-  if (e.altKey) return null;
-  if (mod && !e.shiftKey && /^Digit[1-9]$/.test(e.code)) {
+  if (mod && !e.shiftKey && !e.altKey && /^Digit[1-9]$/.test(e.code)) {
     return { action: "focus", index: Number(e.code.slice(5)) - 1 };
   }
-  if (e.ctrlKey && !e.metaKey && e.code === "Tab") return { action: e.shiftKey ? "prev" : "next" };
-  if (mod && e.shiftKey && e.code === "KeyH") return { action: "bar" };
-  if (mod && !e.shiftKey && e.code === "Slash") return { action: "help" };
-  if (L && L.help && e.code === "Escape") return { action: "help" };
+  if (e.code === "Escape") {
+    if (L.help) return { action: "help" };
+    if (L.settings) return { action: "settings" };
+  }
   return null;
 }
 window.addEventListener(
@@ -361,7 +575,7 @@ window.addEventListener(
     const a = keyOf(e);
     if (!a) return;
     e.preventDefault();
-    if (e.repeat && (a.action === "bar" || a.action === "help")) return;
+    if (e.repeat && ["bar", "help", "settings"].includes(a.action)) return;
     invoke("shortcut", a).catch(showError);
   },
   true,

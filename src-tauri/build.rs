@@ -12,6 +12,12 @@ fn main() {
             "remove_account",
             "panel_focused",
             "shortcut",
+            "panel_keys",
+            "set_key",
+            "set_recording",
+            "pick_save_dir",
+            "reset_save_dir",
+            "open_save_dir",
         ]),
     ))
     .expect("failed to run tauri-build");
