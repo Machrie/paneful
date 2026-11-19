@@ -35,6 +35,8 @@ const START_URL: &str = "https://x.com/home";
 /// shortcuts. The panel capability lets x.com reach only those commands.
 /// `/*KEYS*/null` is replaced with the shortcut bindings at creation.
 const PANEL_JS: &str = include_str!("panel.js");
+/// Left click on an off-site link -> window.open with the real address.
+const LINKS_JS: &str = include_str!("links.js");
 
 pub(crate) struct AppState {
     settings: Mutex<Settings>,
@@ -229,6 +231,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
         .initialization_script(PANEL_JS.replace("/*KEYS*/null", keys_json))
         .initialization_script(media::SCRIPT)
         .initialization_script(capture::SCRIPT)
+        .initialization_script(LINKS_JS)
         .on_navigation(move |url| match nav::decide(url) {
             nav::Decision::Allow => true,
             nav::Decision::OpenExternal => {
@@ -237,7 +240,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
                 // macOS: wry runs this for iframes too, so opening externally
                 // would pop a browser tab per off-list iframe. Just cancel.
                 #[cfg(windows)]
-                let _ = app.opener().open_url(url.as_str(), None::<&str>);
+                open_external(&app, url, "navigation");
                 #[cfg(not(windows))]
                 log::info!("blocked off-list navigation: {url}");
                 false
@@ -258,16 +261,22 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
                 // so the login lands in this account's store.
                 return NewWindowResponse::Allow;
             }
+            // window.open() with no address (filled in later by the page):
+            // nothing to send anywhere, and loading about:blank in the
+            // panel would blank it.
+            if url.scheme() == "about" {
+                log::info!("[{label2}] new window {url}: denied");
+                return NewWindowResponse::Deny;
+            }
             match nav::decide(&url) {
                 nav::Decision::Allow => {
+                    log::info!("[{label2}] new window {url}: same panel");
                     if let Some(wv) = app2.get_webview(&label2) {
                         let _ = wv.navigate(url);
                     }
                 }
-                nav::Decision::OpenExternal => {
-                    let _ = app2.opener().open_url(url.as_str(), None::<&str>);
-                }
-                nav::Decision::Block => {}
+                nav::Decision::OpenExternal => open_external(&app2, &url, "new window"),
+                nav::Decision::Block => log::info!("[{label2}] new window {url}: blocked"),
             }
             NewWindowResponse::Deny
         });
@@ -283,6 +292,15 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
     #[cfg(not(windows))]
     let _ = wv;
     Ok(())
+}
+
+/// Hand an off-list address to the system browser. paneful.log keeps each
+/// one, so a link that "does nothing" shows whether it got here.
+fn open_external<R: Runtime>(app: &AppHandle<R>, url: &tauri::Url, via: &str) {
+    match app.opener().open_url(url.as_str(), None::<&str>) {
+        Ok(()) => log::info!("{via} {url}: system browser"),
+        Err(e) => log::warn!("{via} {url}: system browser failed: {e}"),
+    }
 }
 
 /// M0 check: confirm the patch really put each panel in its own WebView2
