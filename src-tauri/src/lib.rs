@@ -177,15 +177,56 @@ fn top_of(s: &Settings) -> f64 {
     }
 }
 
+/// Size the app lays out in: the window's inner size minus the title bar
+/// area that the content view reaches under (macOS, see `titlebar`).
 fn logical_size<R: Runtime>(window: &Window<R>) -> (f64, f64) {
     let scale = window.scale_factor().unwrap_or(1.0);
     match window.inner_size() {
         Ok(s) => {
             let l = s.to_logical::<f64>(scale);
-            (l.width, l.height)
+            (l.width, (l.height - titlebar()).max(0.0))
         }
         Err(_) => (1280.0, 860.0),
     }
+}
+
+/// macOS: the content view can cover the title bar (seen on macOS 27: content
+/// view 1470x923 = whole window, contentLayoutRect 891 high). Then
+/// inner_size counts the title bar too, and everything laid out from y=0
+/// sat under it: the 6pt strip and most of the top bar were hidden, and
+/// WebKit inset the panels' pages by the rest (26pt), which put the X page
+/// right where the strip should be. Every webview is placed this much lower,
+/// and the layout height is that much smaller. Stored as f64 bits; 0 elsewhere.
+static TITLEBAR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn titlebar() -> f64 {
+    f64::from_bits(TITLEBAR.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Re-read the title bar height. Main thread only (AppKit). True if it changed.
+#[cfg(target_os = "macos")]
+fn measure_titlebar<R: Runtime>(window: &Window<R>) -> bool {
+    use objc2_app_kit::NSWindow;
+    let Ok(ptr) = window.ns_window() else { return false };
+    let t = unsafe {
+        let w: &NSWindow = &*(ptr as *const NSWindow);
+        let Some(cv) = w.contentView() else { return false };
+        let full = cv.frame().size.height;
+        let lr = w.contentLayoutRect();
+        // Unflipped window coordinates: the covered part is on top.
+        (full - (lr.origin.y + lr.size.height)).clamp(0.0, full / 2.0)
+    };
+    let old = TITLEBAR.swap(t.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    if f64::from_bits(old) != t {
+        log::info!("title bar over content: {t}pt");
+        return true;
+    }
+    false
+}
+
+#[cfg(not(target_os = "macos"))]
+fn measure_titlebar<R: Runtime>(_window: &Window<R>) -> bool {
+    false
 }
 
 /// Recompute every rect, move the webviews, tell the host UI.
@@ -232,7 +273,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
 
     if let Some(host) = app.get_webview(HOST) {
         let _ = host.set_bounds(tauri::Rect {
-            position: LogicalPosition::new(0.0, 0.0).into(),
+            position: LogicalPosition::new(0.0, titlebar()).into(),
             size: LogicalSize::new(w, h).into(),
         });
     }
@@ -240,7 +281,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
     for (acc, r) in s.accounts.iter().zip(rects.iter()) {
         if let Some(wv) = app.get_webview(&panel_label(acc)) {
             let _ = wv.set_bounds(tauri::Rect {
-                position: LogicalPosition::new(r.x, r.y).into(),
+                position: LogicalPosition::new(r.x, r.y + titlebar()).into(),
                 size: LogicalSize::new(r.w, r.h).into(),
             });
         }
@@ -251,7 +292,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
             let _ = if help || settings_open || capture || hidden || !shown { wv.hide() } else { wv.show() };
             // Again after each move: Tahoe may add its views later.
             #[cfg(target_os = "macos")]
-            clip_panel(&wv, false);
+            clip_panel(&wv);
         }
         panels.push(PanelView {
             id: acc.id.to_string(),
@@ -390,7 +431,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
 
     let wv = window.add_child(
         with_udf(builder),
-        LogicalPosition::new(rect.x, rect.y),
+        LogicalPosition::new(rect.x, rect.y + titlebar()),
         LogicalSize::new(rect.w, rect.h),
     )?;
 
@@ -401,26 +442,32 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
     #[cfg(windows)]
     log_webview2_profile(&wv);
     #[cfg(target_os = "macos")]
-    clip_panel(&wv, true);
+    clip_panel(&wv);
     health::watch(&wv);
     Ok(())
 }
 
-/// macOS: keep a panel's drawing inside its own frame. On Earl's Mac
-/// (Tahoe) the X page covered the 6pt strip above the panels, and the top
-/// bar flashed and was covered again when shown, while the host UI's divider
-/// still started at the right height: the panel draws above its frame. Since
-/// the macOS 14 SDK, NSView.clipsToBounds defaults to NO, and Tahoe adds
-/// scroll edge "pockets" near the title bar. Logs what it finds so a wrong
-/// frame or an extra view shows up in the log.
+/// macOS: keep a panel's drawing inside its own frame and log where it
+/// really is. On Earl's Mac (macOS 27) the panels' frames are right (6pt
+/// strip left free above them, see the log) but the X page shows up above
+/// them, over the strip and the top bar. Since the macOS 14 SDK,
+/// NSView.clipsToBounds defaults to NO, and Tahoe adds scroll edge
+/// "pockets" near the title bar. The log line (written whenever something
+/// in it changes) has the numbers needed to find which part is shifted.
 #[cfg(target_os = "macos")]
-fn clip_panel<R: Runtime>(wv: &tauri::Webview<R>, log_frames: bool) {
+fn clip_panel<R: Runtime>(wv: &tauri::Webview<R>) {
+    use objc2::runtime::AnyObject;
     use objc2_app_kit::NSView;
+    use objc2_foundation::{NSEdgeInsets, NSObjectProtocol, NSRect};
     use objc2_web_kit::WKWebView;
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
 
-    fn rect(v: &NSView) -> String {
-        let f = v.frame();
-        format!("x={} y={} w={} h={}", f.origin.x, f.origin.y, f.size.width, f.size.height)
+    fn r(f: NSRect) -> String {
+        format!("({},{} {}x{})", f.origin.x, f.origin.y, f.size.width, f.size.height)
+    }
+    fn ins(e: NSEdgeInsets) -> String {
+        format!("(t{} l{} b{} r{})", e.top, e.left, e.bottom, e.right)
     }
     fn class_name(v: &NSView) -> String {
         v.class().name().to_string_lossy().into_owned()
@@ -430,37 +477,77 @@ fn clip_panel<R: Runtime>(wv: &tauri::Webview<R>, log_frames: bool) {
         for sub in v.subviews().iter() {
             let name = class_name(&sub);
             if name.contains("ScrollPocket") {
-                log::info!("[{label}] hiding {name} {}", rect(&sub));
+                log::info!("[{label}] hiding {name} {}", r(sub.frame()));
                 sub.setHidden(true);
             }
             hide_pockets(&sub, label);
         }
     }
+    /// Subviews two levels down, with frames and layer frames.
+    unsafe fn tree(v: &NSView, depth: usize, out: &mut Vec<String>) {
+        for sub in v.subviews().iter() {
+            let layer: *mut AnyObject = objc2::msg_send![&*sub, layer];
+            let lf = if layer.is_null() {
+                "-".to_string()
+            } else {
+                let f: NSRect = objc2::msg_send![layer, frame];
+                r(f)
+            };
+            out.push(format!(
+                "{}{} frame={} layer={} hidden={}",
+                "  ".repeat(depth),
+                class_name(&sub),
+                r(sub.frame()),
+                lf,
+                sub.isHidden()
+            ));
+            if depth < 1 {
+                tree(&sub, depth + 1, out);
+            }
+        }
+    }
+    static LAST: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
     let label = wv.label().to_string();
     let _ = wv.with_webview(move |pw| unsafe {
         let view: &WKWebView = &*(pw.inner() as *const WKWebView);
         view.setClipsToBounds(true);
-        // WebKit may also inset/extend the page for a title bar it thinks
-        // overlaps the view. The panels never sit under the title bar.
-        let sel = objc2::sel!(_setAutomaticallyAdjustsContentInsets:);
-        if objc2_foundation::NSObjectProtocol::respondsToSelector(view, sel) {
-            let _: () = objc2::msg_send![view, _setAutomaticallyAdjustsContentInsets: false];
-        }
         hide_pockets(view, &label);
-        if !log_frames {
-            return;
+
+        let mut parts = vec![format!("frame={}", r(view.frame()))];
+        let layer: *mut AnyObject = objc2::msg_send![view, layer];
+        if !layer.is_null() {
+            let f: NSRect = objc2::msg_send![layer, frame];
+            parts.push(format!("layer={}", r(f)));
         }
-        match view.superview() {
-            Some(sv) => {
-                let siblings: Vec<String> =
-                    sv.subviews().iter().map(|v| format!("{}({})", class_name(&v), rect(&v))).collect();
-                log::info!(
-                    "[{label}] frame {} in parent {} flipped={} clips={}; parent subviews: {}",
-                    rect(view), rect(&sv), sv.isFlipped(), view.clipsToBounds(), siblings.join(", ")
-                );
+        parts.push(format!("safeArea={}", ins(view.safeAreaInsets())));
+        if view.respondsToSelector(objc2::sel!(obscuredContentInsets)) {
+            parts.push(format!("obscured={}", ins(view.obscuredContentInsets())));
+        }
+        if view.respondsToSelector(objc2::sel!(_topContentInset)) {
+            let t: f64 = objc2::msg_send![view, _topContentInset];
+            parts.push(format!("topInset={t}"));
+        }
+        if view.respondsToSelector(objc2::sel!(_automaticallyAdjustsContentInsets)) {
+            let a: bool = objc2::msg_send![view, _automaticallyAdjustsContentInsets];
+            parts.push(format!("autoInsets={a}"));
+        }
+        if let Some(sv) = view.superview() {
+            parts.push(format!("parent={} flipped={}", r(sv.frame()), sv.isFlipped()));
+        }
+        if let Some(w) = view.window() {
+            parts.push(format!("window={} layoutRect={}", r(w.frame()), r(w.contentLayoutRect())));
+            if let Some(cv) = w.contentView() {
+                parts.push(format!("contentView={} {}", class_name(&cv), r(cv.frame())));
             }
-            None => log::info!("[{label}] frame {} (no parent)", rect(view)),
+        }
+        let mut sub = vec![];
+        tree(view, 0, &mut sub);
+        let line = format!("{}; subviews: {}", parts.join(" "), sub.join(" | "));
+        let mut last = LAST.get_or_init(Default::default).lock().unwrap();
+        if last.get(&label) != Some(&line) {
+            log::info!("[{label}] {line}");
+            last.insert(label, line);
         }
     });
 }
@@ -1732,6 +1819,7 @@ pub fn run() {
                 // X's dark theme and the host UI.
                 .theme(Some(tauri::Theme::Dark))
                 .build()?;
+            measure_titlebar(&window);
             let (w, h) = logical_size(&window);
             // Not fatal: without a tray icon the app still works, it just
             // can't be hidden from the top bar button (see tray::hide).
@@ -1753,7 +1841,7 @@ pub fn run() {
             // in the top bar and in the gaps between panels.
             window.add_child(
                 with_udf(WebviewBuilder::new(HOST, WebviewUrl::App("index.html".into()))),
-                LogicalPosition::new(0.0, 0.0),
+                LogicalPosition::new(0.0, titlebar()),
                 LogicalSize::new(w, h),
             )?;
 
@@ -1770,8 +1858,12 @@ pub fn run() {
             }
 
             let handle = app.handle().clone();
+            let win = window.clone();
             window.on_window_event(move |e| {
-                if matches!(e, WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }) {
+                // Runs on the main thread. The title bar area can change
+                // (full screen) or only settle once the window is shown.
+                let moved = measure_titlebar(&win);
+                if moved || matches!(e, WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }) {
                     relayout(&handle);
                 }
             });
