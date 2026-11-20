@@ -5,6 +5,12 @@ on:
   push:
     tags: ['v*']
   pull_request:
+    # Docs-only changes don't need an installer build.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '**.png'
+      - 'LICENSE'
   # Actions tab > build > Run workflow. Fill "release" (e.g. v0.0.1) to build
   # and publish that release from the chosen branch without pushing a tag.
   workflow_dispatch:
