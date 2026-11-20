@@ -90,7 +90,7 @@
       // Zoom while picking posts for a capture would change the crop sizes.
       if (a.action.startsWith("zoom_") && capturing()) return;
       // Holding a toggle key would flip it on and off; only the first press counts.
-      if (e.repeat && ["bar", "help", "settings", "capture", "zoom", "send"].includes(a.action)) return;
+      if (e.repeat && ["bar", "help", "settings", "capture", "zoom", "send", "reload"].includes(a.action)) return;
       // This page knows which post is meant; Rust only opens it.
       if (a.action === "send") startPick();
       else call("shortcut", a).catch(() => {});
@@ -586,9 +586,17 @@
     true,
   );
 
-  window.addEventListener("focus", () => call("panel_focused").catch(() => {}));
+  const focused = () => call("panel_focused").catch(() => {});
+  window.addEventListener("focus", focused);
+  // WKWebView (macOS) doesn't reliably fire window "focus" when the click
+  // moves between webviews of the same window (WebKit bug 226025 and
+  // friends), so the active-panel marker stayed on the old panel. A click
+  // or focus inside the page is proof enough. panel_focused only relayouts
+  // when the active panel actually changes.
+  document.addEventListener("pointerdown", focused, true);
+  document.addEventListener("focusin", focused, true);
   const ready = () => {
-    if (document.hasFocus()) call("panel_focused").catch(() => {});
+    if (document.hasFocus()) focused();
   };
   document.addEventListener("DOMContentLoaded", ready);
 })();

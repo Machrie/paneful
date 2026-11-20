@@ -53,12 +53,14 @@ const keyText = (id) => {
   return k && k.caps.length ? k.caps.join("+") : "";
 };
 const withKey = (text, k) => (k ? `${text} (${k})` : text);
+const reloadTitle = () => withKey("새로고침", keyText("reload"));
 function updateTitles() {
   $("help").title = withKey("단축키", keyText("help"));
   $("settings-btn").title = withKey("설정", keyText("settings"));
   $("hide").title = withKey("상단 바 숨기기", keyText("bar"));
   $("capture").title = withKey("게시물 캡쳐", keyText("capture")) + ": 첫 게시물, 마지막 게시물 순서로 클릭";
   $("tray").title = withKey("창을 트레이로 숨기기", L.hotkey.join("+"));
+  document.querySelectorAll(".tab .reload").forEach((b) => (b.title = reloadTitle()));
   stripTitle();
 }
 
@@ -270,7 +272,7 @@ function build() {
     del.classList.add("danger");
     normal.append(
       Object.assign(iconButton("pencil", "이름·순서 바꾸기 (설정)", () => toggleSettings()), { className: "icon to-settings" }),
-      iconButton("reload", "새로고침", () => invoke("reload_panel", { id: p.id }).catch(showError)),
+      Object.assign(iconButton("reload", reloadTitle(), () => invoke("reload_panel", { id: p.id }).catch(showError)), { className: "icon reload" }),
       del,
     );
     const cancel = () => {
@@ -433,6 +435,7 @@ const KEY_LABELS = {
   zoom_in: "패널 배율 키우기",
   zoom_out: "패널 배율 줄이기",
   zoom_reset: "패널 배율 100%",
+  reload: "패널 새로고침",
 };
 // X's own shortcuts, only the ones that agree across several public lists
 // (X has no current official page for them). Work in the focused panel.
@@ -872,7 +875,7 @@ window.addEventListener(
     const a = keyOf(e);
     if (!a) return;
     e.preventDefault();
-    if (e.repeat && ["bar", "help", "settings", "capture", "zoom", "send"].includes(a.action)) return;
+    if (e.repeat && ["bar", "help", "settings", "capture", "zoom", "send", "reload"].includes(a.action)) return;
     invoke("shortcut", a).catch(showError);
   },
   true,

@@ -14,7 +14,7 @@ use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 pub const GLOBAL: &str = "global";
 
 /// In-app shortcuts: (id, default). Panel focus (Ctrl/Cmd+1..9) is fixed.
-pub const APP: [(&str, &str); 11] = [
+pub const APP: [(&str, &str); 12] = [
     ("next", "Control+Tab"),
     ("prev", "Control+Shift+Tab"),
     ("bar", "CommandOrControl+Shift+H"),
@@ -30,6 +30,9 @@ pub const APP: [(&str, &str); 11] = [
     ("zoom_in", "CommandOrControl+Equal"),
     ("zoom_out", "CommandOrControl+Minus"),
     ("zoom_reset", "CommandOrControl+0"),
+    // Reload the panel the key is pressed in (or the active one). X's own
+    // `r` (reply) is a bare key, so Ctrl/Cmd+R doesn't take it away.
+    ("reload", "CommandOrControl+R"),
 ];
 
 pub fn default_of(id: &str) -> Option<&'static str> {
@@ -208,6 +211,7 @@ pub fn label(id: &str) -> &'static str {
         "zoom_in" => "패널 배율 키우기",
         "zoom_out" => "패널 배율 줄이기",
         "zoom_reset" => "패널 배율 100%",
+        "reload" => "패널 새로고침",
         _ => "?",
     }
 }
@@ -479,6 +483,11 @@ mod tests {
         assert_eq!(binding(&parse("CommandOrControl+Equal").unwrap()).code, "Equal");
         assert_eq!(binding(&parse("CommandOrControl+Minus").unwrap()).code, "Minus");
         assert_eq!(binding(&parse("CommandOrControl+0").unwrap()).code, "Digit0");
+        let r = binding(&parse("CommandOrControl+R").unwrap());
+        assert_eq!(r.code, "KeyR");
+        assert!(!r.shift && !r.alt);
+        assert_eq!(r.ctrl, !cfg!(target_os = "macos"));
+        assert_eq!(r.meta, cfg!(target_os = "macos"));
     }
 
     #[test]
