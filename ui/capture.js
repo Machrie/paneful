@@ -21,7 +21,7 @@
     if (v !== null) anonEl.checked = v === "1";
   } catch (_) {}
 
-  let meta = null; // { w, h, css_w, people, cut }
+  let meta = null; // { w, h, plain_h, css_w, people, cut }
   let seq = 0;
   let busy = false;
 
@@ -39,9 +39,10 @@
     const my = ++seq;
     const anon = anonEl.checked;
     const out = [];
+    const total = anon ? meta.h : meta.plain_h || meta.h;
     try {
-      for (let y = 0; y < meta.h; y += SLICE) {
-        const h = Math.min(SLICE, meta.h - y);
+      for (let y = 0; y < total; y += SLICE) {
+        const h = Math.min(SLICE, total - y);
         const bmp = await createImageBitmap(bytes(await invoke("capture_slice", { anon, y, h })));
         if (my !== seq) return;
         const c = document.createElement("canvas");
