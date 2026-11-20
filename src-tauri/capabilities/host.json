@@ -19,6 +19,7 @@
     "allow-shortcut",
     "allow-panel-keys",
     "allow-set-key",
+    "allow-set-x-key",
     "allow-set-recording",
     "allow-pick-save-dir",
     "allow-reset-save-dir",

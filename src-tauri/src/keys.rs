@@ -244,6 +244,217 @@ pub fn views(map: &BTreeMap<String, String>) -> Vec<KeyView> {
     APP.iter().map(|(id, _)| view(map, id)).collect()
 }
 
+// ---- X's own shortcuts, remapped
+//
+// X handles its shortcuts in its own page code, so the app can't change
+// them. What it can do: in panel.js, outside text fields, swallow the key
+// the user picked and hand X the original key instead (a synthetic
+// keydown/keyup with X's key), and swallow X's original key once it has
+// been moved or turned off. Stored in settings.json `x_keys` by id:
+// missing = X's own key, "" = off, else an accelerator ("F", "Shift+L").
+
+/// One key X expects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct XStep {
+    /// `KeyboardEvent.key`.
+    pub key: &'static str,
+    /// `KeyboardEvent.code`.
+    pub code: &'static str,
+    /// Legacy `keyCode`/`which`, set too in case X still reads it.
+    #[serde(rename = "keyCode")]
+    pub key_code: u32,
+    pub shift: bool,
+}
+
+const fn step(key: &'static str, code: &'static str, key_code: u32, shift: bool) -> XStep {
+    XStep { key, code, key_code, shift }
+}
+
+const G: XStep = step("g", "KeyG", 71, false);
+
+/// X actions that can be moved: (id, label, keys X expects, X's own key
+/// as an accelerator). Sequences (g then h) have no accelerator: their
+/// own keys stay with X, a new key only adds one.
+/// Not here (fixed): Space (scrolls natively, a synthetic one wouldn't),
+/// Enter (also clicks focused buttons), Ctrl/Cmd+Enter (inside the post
+/// box, where the app never touches keys).
+pub const X: [(&str, &str, &[XStep], Option<&str>); 15] = [
+    ("x_next", "다음 게시물", &[step("j", "KeyJ", 74, false)], Some("J")),
+    ("x_prev", "이전 게시물", &[step("k", "KeyK", 75, false)], Some("K")),
+    ("x_load", "새 게시물 불러오기", &[step(".", "Period", 190, false)], Some("Period")),
+    ("x_like", "마음에 들어요", &[step("l", "KeyL", 76, false)], Some("L")),
+    ("x_reply", "답글", &[step("r", "KeyR", 82, false)], Some("R")),
+    ("x_repost", "재게시", &[step("t", "KeyT", 84, false)], Some("T")),
+    ("x_post", "새 게시물", &[step("n", "KeyN", 78, false)], Some("N")),
+    ("x_search", "검색", &[step("/", "Slash", 191, false)], Some("Slash")),
+    ("x_dm", "쪽지", &[step("m", "KeyM", 77, false)], Some("M")),
+    ("x_home", "홈", &[G, step("h", "KeyH", 72, false)], None),
+    ("x_notif", "알림", &[G, step("n", "KeyN", 78, false)], None),
+    ("x_profile", "내 프로필", &[G, step("p", "KeyP", 80, false)], None),
+    ("x_bookmarks", "북마크", &[G, step("b", "KeyB", 66, false)], None),
+    ("x_dms", "쪽지함", &[G, step("m", "KeyM", 77, false)], None),
+    ("x_help", "X 전체 단축키 목록", &[step("?", "Slash", 191, true)], Some("Shift+Slash")),
+];
+
+fn x_def(id: &str) -> Option<&'static (&'static str, &'static str, &'static [XStep], Option<&'static str>)> {
+    X.iter().find(|x| x.0 == id)
+}
+
+/// The key that does `id` in a panel now: the user's, else X's own for a
+/// single key. None: off, or a sequence left to X.
+fn x_effective(map: &BTreeMap<String, String>, id: &str) -> Option<Shortcut> {
+    let (_, _, _, def) = x_def(id)?;
+    match map.get(id).map(|s| s.trim()) {
+        Some("") => None,
+        Some(k) => parse(k).ok(),
+        None => def.and_then(|d| parse(d).ok()),
+    }
+}
+
+/// Which X action (label) uses `sc` now, `except` left out.
+pub fn x_taken(map: &BTreeMap<String, String>, sc: &Shortcut, except: Option<&str>) -> Option<&'static str> {
+    X.iter()
+        .filter(|x| Some(x.0) != except)
+        .find(|x| x_effective(map, x.0).is_some_and(|o| o.mods == sc.mods && o.key == sc.key))
+        .map(|x| x.1)
+}
+
+/// Checks a new key for X action `id` against the app's shortcuts
+/// (`app`, with the global one) and the other X actions (`xmap`).
+pub fn validate_x(
+    app: &BTreeMap<String, String>,
+    xmap: &BTreeMap<String, String>,
+    id: &str,
+    accel: &str,
+) -> Result<Shortcut, String> {
+    let sc = parse(accel)?;
+    let shown = || x_caps(&sc).join("+");
+    if sc.key == Code::Escape {
+        return Err("Esc는 못 씀".into());
+    }
+    if sc.key == Code::KeyG && sc.mods.is_empty() {
+        return Err("g는 X 연속키(g → h 등)의 첫 키라 못 씀".into());
+    }
+    let main = if cfg!(target_os = "macos") { Modifiers::SUPER } else { Modifiers::CONTROL };
+    if sc.key == Code::KeyV && sc.mods == main {
+        return Err(format!("{}는 복사한 링크 열기(고정)에 쓰는 키임", shown()));
+    }
+    if is_panel_focus(&sc) {
+        return Err(format!("{}는 패널 전환(고정)에 쓰는 키임", shown()));
+    }
+    let ids = std::iter::once(GLOBAL).chain(APP.iter().map(|(a, _)| *a));
+    for other in ids {
+        let Some(k) = configured(app, other) else { continue };
+        if let Ok(o) = parse(k) {
+            if o.mods == sc.mods && o.key == sc.key {
+                return Err(format!("{}는 이미 \"{}\"에 쓰는 중", shown(), label(other)));
+            }
+        }
+    }
+    if let Some(l) = x_taken(xmap, &sc, Some(id)) {
+        return Err(format!("{}는 이미 X \"{}\"에 쓰는 중", shown(), l));
+    }
+    Ok(sc)
+}
+
+/// Key caps the way X's own keys are written: "j", "?", "Shift+L".
+pub fn x_caps(sc: &Shortcut) -> Vec<String> {
+    if sc.key == Code::Slash && sc.mods == Modifiers::SHIFT {
+        return vec!["?".into()];
+    }
+    let mut c = caps(sc);
+    if sc.mods.is_empty() {
+        if let Some(last) = c.last_mut() {
+            if last.len() == 1 {
+                *last = last.to_lowercase();
+            }
+        }
+    }
+    c
+}
+
+fn steps_caps(steps: &[XStep]) -> Vec<String> {
+    let mut out = vec![];
+    for (i, s) in steps.iter().enumerate() {
+        if i > 0 {
+            out.push("then".into());
+        }
+        out.push(s.key.to_string());
+    }
+    out
+}
+
+/// One X action for the settings screen and the shortcut overlay.
+#[derive(Debug, Clone, Serialize)]
+pub struct XKeyView {
+    pub id: String,
+    pub label: String,
+    /// What does it now. "then" between the keys of a sequence. Empty: off.
+    pub caps: Vec<String>,
+    /// X's own key(s).
+    pub default_caps: Vec<String>,
+    pub is_default: bool,
+    /// A sequence: X's own keys keep working, so it can't be turned off.
+    pub seq: bool,
+}
+
+pub fn x_views(map: &BTreeMap<String, String>) -> Vec<XKeyView> {
+    X.iter()
+        .map(|&(id, label, steps, def)| {
+            let default_caps = steps_caps(steps);
+            let caps = match map.get(id).map(|s| s.trim()) {
+                None => default_caps.clone(),
+                Some("") if def.is_some() => vec![],
+                Some(k) => parse(k).map(|sc| x_caps(&sc)).unwrap_or_else(|_| default_caps.clone()),
+            };
+            XKeyView {
+                id: id.into(),
+                label: label.into(),
+                caps,
+                default_caps,
+                is_default: !map.contains_key(id),
+                seq: def.is_none(),
+            }
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct XRemap {
+    /// The key the user presses.
+    pub binding: Binding,
+    /// What X gets instead.
+    pub send: Vec<XStep>,
+}
+
+/// What panel.js needs: keys to turn into X's keys, and X's own keys to
+/// swallow (moved elsewhere or off).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct XKeys {
+    pub remap: Vec<XRemap>,
+    pub block: Vec<Binding>,
+}
+
+pub fn x_keys(map: &BTreeMap<String, String>) -> XKeys {
+    let mut out = XKeys::default();
+    for &(id, _, steps, def) in X.iter() {
+        let Some(k) = map.get(id).map(|s| s.trim()) else { continue };
+        if !k.is_empty() {
+            if let Ok(sc) = parse(k) {
+                out.remap.push(XRemap { binding: binding(&sc), send: steps.to_vec() });
+            }
+        }
+        if let Some(d) = def.and_then(|d| parse(d).ok()) {
+            out.block.push(binding(&d));
+        }
+    }
+    // A key that was moved onto another action's old key is that action's
+    // now (panel.js checks `remap` first), so leave it out of `block`.
+    let remapped: Vec<Binding> = out.remap.iter().map(|r| r.binding.clone()).collect();
+    out.block.retain(|b| !remapped.contains(b));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +530,70 @@ mod tests {
         m.insert("bar".into(), "Alt+B".into());
         assert_eq!(configured(&m, "bar"), Some("Alt+B"));
         assert_eq!(bindings(&m)["bar"].code, "KeyB");
+    }
+
+    #[test]
+    fn x_defaults_parse_and_differ() {
+        let none = BTreeMap::new();
+        for (id, _, steps, def) in X {
+            assert!(!steps.is_empty(), "{id}");
+            if let Some(d) = def {
+                let sc = parse(d).unwrap_or_else(|e| panic!("{id}: {e}"));
+                assert_eq!(binding(&sc).code, steps[0].code, "{id}");
+                assert_eq!(binding(&sc).shift, steps[0].shift, "{id}");
+                assert_eq!(x_taken(&none, &sc, Some(id)), None, "{id}");
+            }
+        }
+        assert!(x_keys(&none).remap.is_empty() && x_keys(&none).block.is_empty());
+        assert_eq!(x_views(&none)[0].caps, vec!["j"]);
+        assert_eq!(x_views(&none).last().unwrap().caps, vec!["?"]);
+        assert_eq!(x_views(&none)[9].caps, vec!["g", "then", "h"]);
+    }
+
+    #[test]
+    fn x_validate() {
+        let app = BTreeMap::new();
+        let mut x = BTreeMap::new();
+        // Free key.
+        assert!(validate_x(&app, &x, "x_like", "F").is_ok());
+        // Another X action's key, until that one moves.
+        let e = validate_x(&app, &x, "x_like", "R").unwrap_err();
+        assert!(e.contains("답글"), "{e}");
+        x.insert("x_reply".to_string(), "E".to_string());
+        assert!(validate_x(&app, &x, "x_like", "R").is_ok());
+        assert!(validate_x(&app, &x, "x_like", "E").is_err());
+        // Own key back is fine.
+        assert!(validate_x(&app, &x, "x_like", "L").is_ok());
+        // App keys and fixed keys.
+        assert!(validate_x(&app, &x, "x_like", "CommandOrControl+Slash").is_err());
+        assert!(validate_x(&app, &x, "x_like", "CommandOrControl+3").is_err());
+        assert!(validate_x(&app, &x, "x_like", "CommandOrControl+V").is_err());
+        assert!(validate_x(&app, &x, "x_like", "G").is_err());
+        assert!(validate_x(&app, &x, "x_like", "Shift+G").is_ok());
+        assert!(validate_x(&app, &x, "x_like", "Escape").is_err());
+        // Sequences: a single key is fine, X's keys aren't taken.
+        assert!(validate_x(&app, &x, "x_home", "H").is_ok());
+    }
+
+    #[test]
+    fn x_payload() {
+        let mut x = BTreeMap::new();
+        // Swap j and k, turn like off, home on h.
+        x.insert("x_next".to_string(), "K".to_string());
+        x.insert("x_prev".to_string(), "J".to_string());
+        x.insert("x_like".to_string(), String::new());
+        x.insert("x_home".to_string(), "H".to_string());
+        let p = x_keys(&x);
+        let r: Vec<(&str, Vec<&str>)> =
+            p.remap.iter().map(|r| (r.binding.code.as_str(), r.send.iter().map(|s| s.key).collect())).collect();
+        assert_eq!(r, vec![("KeyK", vec!["j"]), ("KeyJ", vec!["k"]), ("KeyH", vec!["g", "h"])]);
+        // j and k are remapped, so only l is swallowed.
+        let b: Vec<&str> = p.block.iter().map(|b| b.code.as_str()).collect();
+        assert_eq!(b, vec!["KeyL"]);
+        let v = x_views(&x);
+        assert_eq!(v[0].caps, vec!["k"]);
+        assert!(v[3].caps.is_empty() && !v[3].is_default);
+        assert_eq!(v[9].caps, vec!["h"]);
+        assert!(v[9].seq);
     }
 }

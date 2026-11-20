@@ -14,8 +14,11 @@
 // 6. read the unread counts X already shows (badges on the 알림 / 쪽지
 //    links, or "(3)" in the title) and tell the app when they change.
 //    Nothing is requested from X for this.
+// 7. X's own shortcuts moved in settings: outside text fields, the user's
+//    key is swallowed and X gets its own key instead; X's old key is
+//    swallowed once moved or turned off.
 // The panel capability only allows `panel_focused`, `panel_unread`, `shortcut`,
-// `panel_keys` (read the configured bindings), `paste_link`, `open_link`,
+// `panel_keys` / `panel_xkeys` (read the configured bindings), `paste_link`, `open_link`,
 // `send_link` and, for capture.js,
 // `capture_begin` / `capture_shot` / `capture_drop` / `capture_finish`.
 // Keep the key mapping in sync with ui/app.js.
@@ -519,6 +522,66 @@
     "play",
     (e) => {
       if (quiet && e.target instanceof HTMLMediaElement) e.target.pause();
+    },
+    true,
+  );
+
+  // ---- X's own shortcuts, moved
+  // { remap: [{binding, send: [{key, code, keyCode, shift}]}], block: [binding] }
+  // Registered last: the pick / question / panel choice handlers above
+  // take their keys first. Never in a text field or while the IME is
+  // composing: typing a post stays exactly as it was.
+  let xkeys = /*XKEYS*/null || { remap: [], block: [] };
+  call("panel_xkeys").then((k) => (xkeys = k || xkeys), () => {});
+  window.addEventListener("paneful-xkeys", (e) => {
+    if (e.detail && typeof e.detail === "object") xkeys = e.detail;
+  });
+  const swallowed = new Set(); // codes whose keyup X shouldn't see either
+  const fire = (type, s, repeat) => {
+    const ev = new KeyboardEvent(type, {
+      key: s.key,
+      code: s.code,
+      shiftKey: !!s.shift,
+      repeat: !!repeat,
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    // Chromium and WebKit leave these 0 on a constructed event.
+    for (const p of ["keyCode", "which"]) {
+      try {
+        Object.defineProperty(ev, p, { get: () => s.keyCode });
+      } catch (_) {}
+    }
+    (document.activeElement || document.body || document.documentElement).dispatchEvent(ev);
+  };
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (!e.isTrusted) return; // ours (fire) or the page's own
+      if (!xkeys.remap.length && !xkeys.block.length) return;
+      if (e.isComposing || e.keyCode === 229) return;
+      if (editable(e.target) || editable(document.activeElement)) return;
+      if (capturing() || picking || pending || choosing) return;
+      const r = xkeys.remap.find((x) => hit(x.binding, e));
+      if (!r && !xkeys.block.some((b) => hit(b, e))) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      swallowed.add(e.code);
+      if (!r) return;
+      for (const s of r.send) {
+        fire("keydown", s, e.repeat);
+        fire("keyup", s, false);
+      }
+    },
+    true,
+  );
+  window.addEventListener(
+    "keyup",
+    (e) => {
+      if (!e.isTrusted || !swallowed.delete(e.code)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
     },
     true,
   );

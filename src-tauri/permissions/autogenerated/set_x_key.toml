@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-x-key"
+description = "Enables the set_x_key command without any pre-configured scope."
+commands.allow = ["set_x_key"]
+
+[[permission]]
+identifier = "deny-set-x-key"
+description = "Denies the set_x_key command without any pre-configured scope."
+commands.deny = ["set_x_key"]

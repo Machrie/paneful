@@ -9,6 +9,7 @@ x.com 전용 경량 데스크톱 앱. 한 창에 x.com 패널을 나란히 띄�
 - 복사한 X 링크를 패널에서 `Ctrl+V`로 바로 연다
 - 보던 게시물을 다른 계정 패널에서 바로 연다(`Ctrl+Shift+O` 후 게시물 클릭)
 - 패널 하나만 창 전체로 키워 본다(`Ctrl+Shift+F`)
+- X 자체 단축키(`j`/`k`, `l` 등)를 다른 키로 바꾸거나 끈다
 - 패널 이름과 순서를 바꾼다
 - 트레이로 숨기면 재생 중인 영상·소리가 멈춘다
 - 새 버전이 나오면 상단 바와 트레이 메뉴에 알려 준다
@@ -109,7 +110,7 @@ x.com 전용 경량 데스크톱 앱. 한 창에 x.com 패널을 나란히 띄�
 | `Ctrl+마우스 휠` | 패널 배율 키우기 / 줄이기 (고정) |
 | `Ctrl+Alt+X` (맥 `⌘⌥X`) | 창 숨기기 / 불러오기. 다른 앱이 앞에 있어도 동작 |
 
-x.com 자체 단축키(`j`/`k` 이동, `l` 좋아요, `n` 새 게시물 등)는 활성 패널에 그대로 먹힌다. 바의 버튼을 눌러도 키보드 포커스는 활성 패널로 돌아간다. 전체 목록은 패널에서 `?`.
+x.com 자체 단축키(`j`/`k` 이동, `l` 좋아요, `n` 새 게시물 등)는 활성 패널에 그대로 먹힌다. 바의 버튼을 눌러도 키보드 포커스는 활성 패널로 돌아간다. 전체 목록은 패널에서 `?`. 단축키 목록에 나온 X 키는 [설정](#설정)의 **X 단축키**에서 다른 키로 바꾸거나 끌 수 있다.
 
 ### 링크 붙여넣어 열기
 
@@ -195,6 +196,12 @@ X가 패널 안에 이미 보여 주는 숫자(왼쪽·아래 메뉴의 **알림
   - 다른 Paneful 단축키나 `Ctrl+1~9`와 겹치면 거부한다
   - 전역 단축키를 다른 앱이 쓰고 있으면 그 줄에 등록 실패가 뜨고 이전 키가 유지된다
   - 키 입력을 기다리는 동안엔 전역 단축키가 창을 숨기지 않는다
+- **X 단축키**: X가 원래 쓰는 키(`j`, `l`, `g`→`h` 등)를 다른 키로 바꾸거나 끈다. 방식은 같고, **기본값**은 X의 원래 키
+  - X 코드를 고치는 게 아니라, 패널에서 바꾼 키를 누르면 앱이 그 키를 삼키고 X에 원래 키를 대신 넘긴다. 바꾸거나 끈 원래 키는 앱이 삼킨다
+  - 글 입력칸(게시물·검색·쪽지)에 커서가 있거나 한글을 조합 중일 땐 아무것도 안 바꾼다
+  - `g`→`h` 같은 연속키는 새 키를 하나 더 주는 것만 된다. 원래 연속키도 계속 먹고, 끌 수 없다. `g` 단독은 연속키 첫 키라 새 키로 못 쓴다
+  - `Space`(스크롤), `Enter`(게시물 열기), `Ctrl+Enter`(게시하기)는 고정이다
+  - Paneful 단축키, `Ctrl+1~9`, `Ctrl+V`, 다른 X 단축키와 겹치면 거부한다. 목록에 없는 X 키(예: `u`)로 바꾸면 그 키의 원래 X 기능은 가려진다
 - **알림 표시**: 트레이·작업 표시줄(Dock) 아이콘의 안 읽은 표시 켜기/끄기. 자세한 건 [알림 숫자](#알림-숫자)
 - **새 버전**: 자동 확인 켜기/끄기, **지금 확인**, **받기**, **이 버전 건너뛰기**. 자세한 건 [새 버전 알림](#새-버전-알림)
 - **X 화면 규칙**: 고친 규칙 자동 받기 켜기/끄기, 지금 쓰는 규칙 번호, **지금 확인**. 자세한 건 [X 화면 규칙 자동 받기](#x-화면-규칙-자동-받기)
@@ -294,12 +301,12 @@ npx @tauri-apps/cli@2 build           # 설치 파일 (Windows: NSIS .exe, macOS
   - Windows: 같은 호출을 `crates/tauri-runtime-wry` 패치가 WebView2 프로필 이름(UUID hex)으로 바꾼다. 런타임 하나를 공유한다 (업스트림 tauri-apps/tauri#16054 와 같은 방식). 자세한 건 `crates/tauri-runtime-wry/PANEFUL_PATCH.md`
 - 내비게이션 허용 목록(`src-tauri/src/nav.rs`) 밖 링크는 시스템 브라우저로
 - 설정은 `settings.json` (앱 설정 폴더: Windows `%APPDATA%\dev.machrie.paneful`, macOS `~/Library/Application Support/dev.machrie.paneful`)
-- 단축키 설정(파싱, 겹침 검사, 패널용 바인딩)은 `src-tauri/src/keys.rs`. `settings.json`의 `keys`(앱 단축키), `hotkey`(전역), `save_dir`(저장 폴더)에 들어간다
+- 단축키 설정(파싱, 겹침 검사, 패널용 바인딩)은 `src-tauri/src/keys.rs`. `settings.json`의 `keys`(앱 단축키), `x_keys`(옮긴 X 단축키), `hotkey`(전역), `save_dir`(저장 폴더)에 들어간다
 - 패널 배율은 `src-tauri/src/zoom.rs`(단계), `settings.json`의 계정별 `zoom`(100%면 안 적음). 웹뷰 `set_zoom`(WebView2 `ZoomFactor`, WKWebView `pageZoom`)으로 적용하고, 페이지를 새로 읽을 때마다 다시 적용한다
 - 알림 숫자는 `src-tauri/src/unread.rs`(값 검사, 합계, 트레이 아이콘 빨간 점). 패널 스크립트가 X 화면의 배지를 읽어 `panel_unread`로 보낸다. 저장하지 않는다
 - 트레이·전역 단축키는 `src-tauri/src/tray.rs` (`tray-icon` 피처, `tauri-plugin-global-shortcut`)
 - 패널 주입 스크립트
-  - `src-tauri/src/panel.js`: 포커스 보고, 앱 단축키(`Ctrl+휠` 배율 포함), 입력창 밖 `Ctrl+V` 링크 열기, 알림·쪽지 배지 읽기만. `panel` capability로 `panel_focused`, `panel_unread`(숫자만, Rust가 형식 검사), `shortcut`, `panel_keys`(단축키 바인딩 읽기), `paste_link`(클립보드는 Rust가 읽고 링크 검사·정리는 `nav.rs`의 `x_link`, 이동은 안 함), `open_link`(사용자가 확인한 주소를 `x_link`로 다시 검사하고 이동), `send_link`(다른 패널에서 열기: 주소를 `x_link`로 검사하고 고른 패널을 이동)만 허용. 창을 트레이로 숨길 때 영상 정지도 여기서 한다
+  - `src-tauri/src/panel.js`: 포커스 보고, 앱 단축키(`Ctrl+휠` 배율 포함), 입력창 밖 `Ctrl+V` 링크 열기, 알림·쪽지 배지 읽기만. `panel` capability로 `panel_focused`, `panel_unread`(숫자만, Rust가 형식 검사), `shortcut`, `panel_keys`·`panel_xkeys`(단축키 바인딩 읽기), `paste_link`(클립보드는 Rust가 읽고 링크 검사·정리는 `nav.rs`의 `x_link`, 이동은 안 함), `open_link`(사용자가 확인한 주소를 `x_link`로 다시 검사하고 이동), `send_link`(다른 패널에서 열기: 주소를 `x_link`로 검사하고 고른 패널을 이동)만 허용. 창을 트레이로 숨길 때 영상 정지도 여기서 한다
   - `src-tauri/src/links.js`: x.com 계열 밖 링크의 왼쪽 클릭을 x.com보다 먼저 받아 실제 주소로 `window.open`. `on_new_window`가 기본 브라우저로 보낸다(우클릭 > 새 창과 같은 경로)
   - `src-tauri/src/rules.js` + `rules.rs` + `rules/x.v1.json`: X 화면 규칙(선택자). Rust가 받고 검증·캐시하고, `rules.js`가 `panel.js`·`media.js`·`capture.js`에 넘긴다. 패널은 `panel_rules`로 읽기만 한다
   - `src-tauri/src/media.js` + `media.rs`: 원본 저장 버튼. 패널엔 IPC 없이 `window.open` 트리거를 `on_new_window`가 가로채고, Rust가 twimg 주소를 검증한 뒤 쿠키 없이 받는다

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-panel-xkeys"
+description = "Enables the panel_xkeys command without any pre-configured scope."
+commands.allow = ["panel_xkeys"]
+
+[[permission]]
+identifier = "deny-panel-xkeys"
+description = "Denies the panel_xkeys command without any pre-configured scope."
+commands.deny = ["panel_xkeys"]
