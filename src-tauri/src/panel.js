@@ -65,14 +65,22 @@
   // macOS: a trackpad pinch reaches the page as Ctrl + wheel with no key
   // held, so a light brush of two fingers zoomed the panel (and the level is
   // saved). Ctrl + wheel there is swallowed and does nothing; only Cmd zooms.
+  // Settings can turn the wheel zoom off (default off on macOS). Off, the
+  // wheel is left alone and just scrolls.
+  let wheelZoom = /*WHEEL*/true;
+  window.addEventListener("paneful-wheel", (e) => (wheelZoom = e.detail === true));
   let wheelSum = 0;
   let wheelAt = 0;
   window.addEventListener(
     "wheel",
     (e) => {
       if (!(e.ctrlKey || (mac && e.metaKey))) return;
+      if (mac && !e.metaKey) {
+        e.preventDefault(); // pinch: swallowed, see above
+        return;
+      }
+      if (!wheelZoom) return;
       e.preventDefault();
-      if (mac && !e.metaKey) return;
       if (capturing()) return;
       wheelSum += e.deltaMode === 0 ? e.deltaY : e.deltaY * 40;
       const now = Date.now();

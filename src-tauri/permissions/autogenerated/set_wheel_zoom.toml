@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-wheel-zoom"
+description = "Enables the set_wheel_zoom command without any pre-configured scope."
+commands.allow = ["set_wheel_zoom"]
+
+[[permission]]
+identifier = "deny-set-wheel-zoom"
+description = "Denies the set_wheel_zoom command without any pre-configured scope."
+commands.deny = ["set_wheel_zoom"]
