@@ -87,7 +87,7 @@
       // Zoom while picking posts for a capture would change the crop sizes.
       if (a.action.startsWith("zoom_") && capturing()) return;
       // Holding a toggle key would flip it on and off; only the first press counts.
-      if (e.repeat && ["bar", "help", "settings", "capture", "zoom", "send"].includes(a.action)) return;
+      if (e.repeat && ["bar", "help", "settings", "capture", "zoom", "send", "reload"].includes(a.action)) return;
       // This page knows which post is meant; Rust only opens it.
       if (a.action === "send") startPick();
       else call("shortcut", a).catch(() => {});

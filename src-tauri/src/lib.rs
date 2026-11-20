@@ -646,6 +646,8 @@ async fn panel_focused(app: AppHandle, state: State<'_, AppState>, webview: Webv
 /// - `zoom_in` / `zoom_out` / `zoom_reset`: Ctrl/Cmd + = / - / 0, page zoom
 ///   of the panel the key was pressed in; from the host UI the panel at
 ///   `index` (tab button) or the active one
+/// - `reload`: Ctrl/Cmd+R, reload the panel the key was pressed in (from the
+///   host UI the active one), same as the 새로고침 button
 #[tauri::command]
 async fn shortcut(
     app: AppHandle,
@@ -839,6 +841,26 @@ fn run_shortcut(
         "zoom_reset" => Some(0),
         _ => None,
     };
+    if action == "reload" {
+        // Same target rule as zoom: the panel the key was pressed in, else
+        // the active one. Async: a dead panel is rebuilt (recreate_panel).
+        let target = caller
+            .or_else(|| index.and_then(|i| ids.get(i).copied()))
+            .or(active.filter(|a| ids.contains(a)))
+            .or(ids.first().copied());
+        if let Some(id) = target {
+            let label = format!("panel-{}", id.simple());
+            if caller.is_none() {
+                focus_account(&app, id);
+            }
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = reload_label(&app, &label).await {
+                    log::error!("[{label}] reload failed: {e}");
+                }
+            });
+        }
+        return Ok(());
+    }
     if let Some(dir) = dir {
         // A panel zooms itself; the host UI names a tab or means the active one.
         let target = caller
@@ -1071,13 +1093,17 @@ fn set_muted<R: Runtime>(wv: &tauri::Webview<R>, muted: bool) {
 /// recovery count, and rebuilds the panel if its WebView2 is gone.
 #[tauri::command]
 async fn reload_panel(app: AppHandle, id: String) -> Result<(), String> {
-    let label = format!("panel-{}", id.replace('-', ""));
-    let dead = health::is_dead(&label);
-    health::reset(&label);
+    reload_label(&app, &format!("panel-{}", id.replace('-', ""))).await
+}
+
+/// Reload one panel by webview label (button, menu, `reload` shortcut).
+async fn reload_label<R: Runtime>(app: &AppHandle<R>, label: &str) -> Result<(), String> {
+    let dead = health::is_dead(label);
+    health::reset(label);
     if dead {
-        return recreate_panel(&app, &label).await;
+        return recreate_panel(app, label).await;
     }
-    let wv = app.get_webview(&label).ok_or("no such panel")?;
+    let wv = app.get_webview(label).ok_or("no such panel")?;
     wv.reload().map_err(|e| e.to_string())
 }
 
