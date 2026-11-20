@@ -563,6 +563,23 @@
   }
 
   // ------------------------------------------------ shoot pass
+  // Where a post ends in the picture. Under the action bar of the post a
+  // page is about, X puts its own rows (reply sort "관련 있음", "인용 보기");
+  // they are not part of the post, so the picture stops a little under the
+  // action bar. Anything else keeps its full height.
+  function endOf(a, r) {
+    const qbox = quoteBoxOf(a);
+    let bar = null;
+    for (const g of a.querySelectorAll(S("actionBar"))) {
+      if (qbox && qbox.contains(g)) continue;
+      const b = g.getBoundingClientRect();
+      if (b.height > 0 && (!bar || b.bottom > bar.bottom)) bar = b;
+    }
+    if (!bar) return r.bottom;
+    const end = bar.bottom + 12;
+    return end < r.bottom - 8 ? end : r.bottom;
+  }
+
   // Rectangles of the posts in `keys` visible now, from the cursor down.
   // cursor = { i: index in keys, off: px of that post already taken }
   function plan(keys, cur) {
@@ -574,17 +591,18 @@
       const a = byKey.get(keys[i]);
       if (!a) break; // not rendered yet: scroll on
       const r = a.getBoundingClientRect();
+      const end = endOf(a, r);
       const off = i === cur.i ? cur.off : 0;
-      if (off >= r.height - 0.5) {
+      if (off >= end - r.top - 0.5) {
         next = { i: i + 1, off: 0 };
         continue;
       }
       const top = r.top + off;
       if (top >= vh - 1) break;
       if (top < -1) return null; // part of it is above the screen: re-scroll
-      const bottom = Math.min(r.bottom, vh);
+      const bottom = Math.min(end, vh);
       crops.push({ x: r.left, y: top, w: r.width, h: bottom - top, a });
-      if (bottom < r.bottom - 0.5) {
+      if (bottom < end - 0.5) {
         next = { i, off: off + (bottom - top) };
         break;
       }

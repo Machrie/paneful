@@ -11,6 +11,7 @@
     "postText": "[data-testid=\"tweetText\"]",
     "socialContext": "[data-testid=\"socialContext\"]",
     "quoteBox": "div[role=\"link\"]",
+    "actionBar": "[role=\"group\"]",
     "photo": "[data-testid=\"tweetPhoto\"]",
     "video": "[data-testid=\"videoPlayer\"], [data-testid=\"videoComponent\"]",
     "notifLink": "a[data-testid=\"AppTabBar_Notifications_Link\"], a[href=\"/notifications\"][role=\"link\"]",
