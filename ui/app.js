@@ -25,7 +25,7 @@ let L = null; // last layout payload from Rust
 let shape = ""; // panel ids/labels/colors the DOM was built for
 let hotkeyErrorShown = false; // start-up hotkey error toasted once
 let keysShape = ""; // shortcut set the overlay / settings rows were built for
-let rec = null; // settings: shortcut waiting for a key press {id, btn}
+let rec = null; // settings: shortcut waiting for a key press {id, btn, restore, apply}
 const rowErrs = {}; // settings: last error per shortcut, kept across rebuilds
 
 // Static, trusted markup only.
@@ -195,7 +195,7 @@ function render() {
   if (!L.settings && rec) stopRec();
   document.documentElement.style.setProperty("--top", `${L.top}px`);
   const s = L.panels.map((p) => `${p.id}\u0000${p.label}\u0000${p.color}`).join("\u0001");
-  const ks = JSON.stringify([L.keys, L.global, L.hotkey, L.hotkey_error, L.save_dir, L.data_dir, L.data_warning]);
+  const ks = JSON.stringify([L.keys, L.x_keys, L.global, L.hotkey, L.hotkey_error, L.save_dir, L.data_dir, L.data_warning]);
   if (ks !== keysShape && !rec) {
     keysShape = ks;
     buildKeys();
@@ -436,27 +436,22 @@ const KEY_LABELS = {
 };
 // X's own shortcuts, only the ones that agree across several public lists
 // (X has no current official page for them). Work in the focused panel.
-// `then` = press one key, release, then the next (g then h).
-const X_KEYS = [
-  [["j"], "다음 게시물"],
-  [["k"], "이전 게시물"],
-  [["Space"], "아래로 스크롤"],
-  [["."], "새 게시물 불러오기"],
-  [["Enter"], "게시물 열기"],
-  [["l"], "마음에 들어요"],
-  [["r"], "답글"],
-  [["t"], "재게시"],
-  [["n"], "새 게시물"],
-  [[mac ? "⌘" : "Ctrl", "Enter"], "게시하기"],
-  [["/"], "검색"],
-  [["m"], "쪽지"],
-  [["g", "then", "h"], "홈"],
-  [["g", "then", "n"], "알림"],
-  [["g", "then", "p"], "내 프로필"],
-  [["g", "then", "b"], "북마크"],
-  [["g", "then", "m"], "쪽지함"],
-  [["?"], "X 전체 단축키 목록"],
-];
+// The movable ones come from settings via Rust (keys.rs X, L.x_keys), as
+// they are now; these three stay as X has them (see keys.rs). "then" =
+// press one key, release, then the next (g then h).
+const X_FIXED = {
+  x_prev: [["Space"], "아래로 스크롤"],
+  x_load: [["Enter"], "게시물 열기"],
+  x_post: [[MOD, "Enter"], "게시하기"],
+};
+function xRows() {
+  const rows = [];
+  for (const v of L.x_keys) {
+    if (v.caps.length) rows.push([v.caps, v.label]);
+    if (X_FIXED[v.id]) rows.push(X_FIXED[v.id]);
+  }
+  return rows;
+}
 function fillKeys(dl, rows) {
   for (const [keys, label] of rows) {
     const dt = document.createElement("dt");
@@ -485,6 +480,8 @@ function buildKeys() {
   const rows = [[[MOD, "1–9"], "N번째 패널로 포커스"], [[MOD, "V"], PASTE_LABEL], [[MOD, "휠"], WHEEL_LABEL]];
   for (const k of L.keys) if (k.caps.length) rows.push([k.caps, KEY_LABELS[k.id]]);
   fillKeys(dl, rows);
+  $("x-keys").replaceChildren();
+  fillKeys($("x-keys"), xRows());
   if (L.hotkey.length) {
     fillKeys(dl, [[L.hotkey, KEY_LABELS.global]]);
   } else {
@@ -496,7 +493,6 @@ function buildKeys() {
     dl.append(dt, dd);
   }
 }
-fillKeys($("x-keys"), X_KEYS);
 const toggleHelp = () => invoke("shortcut", { action: "help" }).catch(showError);
 $("help").onclick = toggleHelp;
 $("close").onclick = (e) => {
@@ -576,6 +572,25 @@ function buildSettings() {
     row.append(name, caps, note);
     box.append(row);
   }
+
+  const xbox = $("xkey-rows");
+  xbox.replaceChildren();
+  for (const v of L.x_keys) xbox.append(xKeyRow(v));
+  for (const [keys, label] of Object.values(X_FIXED)) {
+    const row = document.createElement("div");
+    row.className = "keyrow";
+    const name = document.createElement("span");
+    name.className = "kname";
+    name.textContent = label;
+    const caps = document.createElement("span");
+    caps.className = "kcaps fixed";
+    caps.append(kbds(keys));
+    const note = document.createElement("span");
+    note.className = "knote";
+    note.textContent = "고정";
+    row.append(name, caps, note);
+    xbox.append(row);
+  }
 }
 
 // ---- settings: panel names and order
@@ -642,6 +657,12 @@ function buildPanels() {
 function kbds(keys) {
   const f = document.createDocumentFragment();
   keys.forEach((k) => {
+    if (k === "then") {
+      const s = document.createElement("span");
+      s.className = "then";
+      s.textContent = "→";
+      return void f.append(s);
+    }
     const kbd = document.createElement("kbd");
     kbd.textContent = k;
     f.append(kbd);
@@ -671,7 +692,7 @@ function keyRow(v) {
     btn.classList.toggle("off", !v.caps.length);
   };
   show();
-  btn.onclick = () => startRec(v.id, btn, show);
+  btn.onclick = () => startRec(v.id, btn, show, (a) => setKey(v.id, a));
   const def = pill("기본값", () => setKey(v.id, null));
   def.disabled = v.is_default;
   def.title = `기본값: ${v.default_caps.join("+")}`;
@@ -683,6 +704,50 @@ function keyRow(v) {
   err.textContent = rowErrs[v.id] || (v.id === "global" && L.hotkey_error) || "";
   row.append(name, btn, def, off, err);
   return row;
+}
+
+// One of X's own shortcuts. Same row as the app's, but "기본값" is X's key
+// and a sequence (g → h) can't be turned off: X takes those keys itself.
+function xKeyRow(v) {
+  const row = document.createElement("div");
+  row.className = "keyrow";
+  const name = document.createElement("span");
+  name.className = "kname";
+  name.textContent = v.label;
+  const btn = document.createElement("button");
+  btn.className = "kcaps";
+  btn.title = "눌러서 새 키 입력";
+  const show = () => {
+    btn.replaceChildren();
+    if (v.caps.length) btn.append(kbds(v.caps));
+    else btn.textContent = "꺼짐";
+    btn.classList.toggle("off", !v.caps.length);
+  };
+  show();
+  btn.onclick = () => startRec(v.id, btn, show, (a) => setXKey(v, a));
+  const def = pill("기본값", () => setXKey(v, null));
+  def.disabled = v.is_default;
+  def.title = `X 기본값: ${v.default_caps.map((k) => (k === "then" ? "→" : k)).join(" ")}`;
+  const off = pill("끄기", () => setXKey(v, ""));
+  off.disabled = !v.caps.length || v.seq;
+  if (v.seq) off.title = "연속키는 X가 직접 받아서 끌 수 없음";
+  const err = document.createElement("span");
+  err.className = "kerr warn";
+  err.dataset.id = v.id;
+  err.textContent = rowErrs[v.id] || "";
+  row.append(name, btn, def, off, err);
+  return row;
+}
+
+async function setXKey(v, accel) {
+  rowError(v.id, "");
+  settingsMsg("");
+  try {
+    await invoke("set_x_key", { id: v.id, accel });
+    settingsMsg(`X "${v.label}" 바뀜`);
+  } catch (e) {
+    rowError(v.id, String(e));
+  }
 }
 
 function rowError(id, text) {
@@ -703,9 +768,9 @@ async function setKey(id, accel) {
   }
 }
 
-function startRec(id, btn, restore) {
+function startRec(id, btn, restore, apply) {
   if (rec) stopRec();
-  rec = { id, btn, restore };
+  rec = { id, btn, restore, apply };
   btn.classList.add("rec");
   btn.replaceChildren();
   btn.textContent = "키 조합을 누르기 (Esc 취소)";
@@ -753,14 +818,14 @@ window.addEventListener(
     e.stopImmediatePropagation();
     if (e.repeat) return;
     if (/^(Control|Shift|Alt|Meta|OS)(Left|Right)?$/.test(e.code) || !e.code) return; // modifier alone
-    const { id } = rec;
+    const { apply } = rec;
     if (e.code === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
       stopRec();
       return;
     }
     const accel = accelOf(e);
     stopRec();
-    setKey(id, accel);
+    apply(accel);
   },
   true,
 );

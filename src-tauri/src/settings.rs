@@ -73,6 +73,10 @@ pub struct Settings {
     /// Missing id = default, "" = off.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub keys: BTreeMap<String, String>,
+    /// X's own shortcuts moved to other keys, by id (see keys::X).
+    /// Missing id = X's own key, "" = off.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub x_keys: BTreeMap<String, String>,
     /// Folder for downloaded media and captures. Missing = <Downloads>/Paneful.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub save_dir: Option<String>,
@@ -126,6 +130,7 @@ impl Default for Settings {
             show_bar: false,
             hotkey: None,
             keys: BTreeMap::new(),
+            x_keys: BTreeMap::new(),
             save_dir: None,
             update_check: true,
             skip_version: None,
@@ -195,6 +200,7 @@ impl Settings {
             show_bar: field(&v, "show_bar"),
             hotkey: field(&v, "hotkey"),
             keys: field(&v, "keys"),
+            x_keys: field(&v, "x_keys"),
             save_dir: field(&v, "save_dir"),
             update_check: v.get("update_check").and_then(|x| x.as_bool()).unwrap_or(true),
             skip_version: field(&v, "skip_version"),

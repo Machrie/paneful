@@ -136,6 +136,8 @@ struct LayoutPayload {
     global: keys::KeyView,
     /// In-app shortcuts, display order.
     keys: Vec<keys::KeyView>,
+    /// X's own shortcuts as moved in settings, display order.
+    x_keys: Vec<keys::XKeyView>,
     /// Save folder in effect, and whether it is the default one.
     save_dir: String,
     save_dir_default: bool,
@@ -276,6 +278,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
         hotkey_error,
         global: keys::view(&s.key_map(), keys::GLOBAL),
         keys: keys::views(&s.keys),
+        x_keys: keys::x_views(&s.x_keys),
         save_dir: media::save_dir(app).map(|d| d.display().to_string()).unwrap_or_default(),
         save_dir_default: s.save_dir.is_none(),
         data_dir: portable::root().map(|d| d.display().to_string()),
@@ -297,6 +300,11 @@ fn bindings_json(s: &Settings) -> String {
     serde_json::to_string(&keys::bindings(&s.keys)).unwrap_or_else(|_| "null".into())
 }
 
+/// Moved X shortcuts as JSON, for panel.js and the `paneful-xkeys` event.
+fn x_keys_json(s: &Settings) -> String {
+    serde_json::to_string(&keys::x_keys(&s.x_keys)).unwrap_or_else(|_| "null".into())
+}
+
 fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, keys_json: &str) -> tauri::Result<()> {
     let app = window.app_handle().clone();
     let rules_js = {
@@ -306,6 +314,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
             .replace("/*BUILTIN*/null", &rules::json(&rules::builtin()))
             .replace("/*RULES*/null", &rules::json(&cur))
     };
+    let x_json = x_keys_json(&app.state::<AppState>().settings.lock().unwrap());
     let app2 = app.clone();
     let label = panel_label(acc);
     let label2 = label.clone();
@@ -313,7 +322,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(START_URL.parse().unwrap()))
         .data_store_identifier(acc.store_id())
         .initialization_script(rules_js)
-        .initialization_script(PANEL_JS.replace("/*KEYS*/null", keys_json))
+        .initialization_script(PANEL_JS.replace("/*KEYS*/null", keys_json).replace("/*XKEYS*/null", &x_json))
         .initialization_script(media::SCRIPT)
         .initialization_script(capture::SCRIPT)
         .initialization_script(LINKS_JS)
@@ -536,7 +545,7 @@ fn purge_pending_profiles(app: &tauri::App, s: &mut Settings) {
 
 // ---------------------------------------------------------------- commands
 // The host webview may call these (capabilities/host.json); x.com panels only
-// panel_focused, panel_unread, shortcut, panel_keys, paste_link, open_link, send_link and capture_begin/shot/drop/finish
+// panel_focused, panel_unread, shortcut, panel_keys, panel_xkeys, paste_link, open_link, send_link and capture_begin/shot/drop/finish
 // (capabilities/panel.json). Commands are async
 // because add_child from a sync command deadlocks on WebView2.
 
@@ -1192,6 +1201,62 @@ async fn panel_keys(state: State<'_, AppState>) -> Result<BTreeMap<String, keys:
     Ok(keys::bindings(&state.settings.lock().unwrap().keys))
 }
 
+/// X shortcuts as moved in settings. panel.js asks on every page load, like
+/// `panel_keys`.
+#[tauri::command]
+async fn panel_xkeys(state: State<'_, AppState>) -> Result<keys::XKeys, String> {
+    Ok(keys::x_keys(&state.settings.lock().unwrap().x_keys))
+}
+
+/// Tell every panel the new X key map.
+fn push_xkeys<R: Runtime>(app: &AppHandle<R>, s: &Settings) {
+    let json = x_keys_json(s);
+    for acc in &s.accounts {
+        if let Some(wv) = app.get_webview(&panel_label(acc)) {
+            let _ = wv.eval(format!(
+                "window.dispatchEvent(new CustomEvent('paneful-xkeys',{{detail:{json}}}))"
+            ));
+        }
+    }
+}
+
+/// Move one X shortcut. `accel`: None = back to X's own key, "" = off.
+#[tauri::command]
+async fn set_x_key(app: AppHandle, state: State<'_, AppState>, id: String, accel: Option<String>) -> Result<(), String> {
+    let Some(&(_, _, _, def)) = keys::X.iter().find(|x| x.0 == id) else {
+        return Err("unknown shortcut".into());
+    };
+    let mut accel = accel.map(|a| a.trim().to_string());
+    let (app_map, x_map) = {
+        let s = state.settings.lock().unwrap();
+        (s.key_map(), s.x_keys.clone())
+    };
+    match accel.as_deref() {
+        None => {}
+        Some("") if def.is_none() => return Err("연속키는 X가 직접 받아서 끌 수 없음".into()),
+        Some("") => {}
+        Some(k) => {
+            let sc = keys::validate_x(&app_map, &x_map, &id, k)?;
+            // X's own key again: same as no change.
+            if def.and_then(|d| keys::parse(d).ok()).is_some_and(|d| d.mods == sc.mods && d.key == sc.key) {
+                accel = None;
+            }
+        }
+    }
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        match accel {
+            None => s.x_keys.remove(&id),
+            Some(a) => s.x_keys.insert(id.clone(), a),
+        };
+        s.clone()
+    };
+    state.save(&snapshot);
+    push_xkeys(&app, &snapshot);
+    relayout(&app);
+    Ok(())
+}
+
 /// Tell every panel the new bindings.
 fn push_keys<R: Runtime>(app: &AppHandle<R>, s: &Settings) {
     let json = bindings_json(s);
@@ -1219,7 +1284,11 @@ async fn set_key(app: AppHandle, state: State<'_, AppState>, id: String, accel: 
         Some(a) => Some(a.clone()),
     };
     if let Some(k) = &effective {
-        keys::validate(&map, &id, k)?;
+        let sc = keys::validate(&map, &id, k)?;
+        let x_map = state.settings.lock().unwrap().x_keys.clone();
+        if let Some(l) = keys::x_taken(&x_map, &sc, None) {
+            return Err(format!("{}는 이미 X \"{}\"에 쓰는 중", keys::caps(&sc).join("+"), l));
+        }
     }
 
     if id == keys::GLOBAL {
@@ -1600,12 +1669,14 @@ pub fn run() {
             panel_unread,
             shortcut,
             panel_keys,
+            panel_xkeys,
             paste_link,
             open_link,
             send_link,
             rename_account,
             move_account,
             set_key,
+            set_x_key,
             set_recording,
             pick_save_dir,
             reset_save_dir,
