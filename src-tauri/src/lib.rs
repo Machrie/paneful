@@ -249,6 +249,9 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
             // Native webviews sit above the host UI; the overlays can only
             // show while they are hidden.
             let _ = if help || settings_open || capture || hidden || !shown { wv.hide() } else { wv.show() };
+            // Again after each move: Tahoe may add its views later.
+            #[cfg(target_os = "macos")]
+            clip_panel(&wv, false);
         }
         panels.push(PanelView {
             id: acc.id.to_string(),
@@ -395,8 +398,69 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
     }
     #[cfg(windows)]
     log_webview2_profile(&wv);
+    #[cfg(target_os = "macos")]
+    clip_panel(&wv, true);
     health::watch(&wv);
     Ok(())
+}
+
+/// macOS: keep a panel's drawing inside its own frame. On Earl's Mac
+/// (Tahoe) the X page covered the 6pt strip above the panels, and the top
+/// bar flashed and was covered again when shown, while the host UI's divider
+/// still started at the right height: the panel draws above its frame. Since
+/// the macOS 14 SDK, NSView.clipsToBounds defaults to NO, and Tahoe adds
+/// scroll edge "pockets" near the title bar. Logs what it finds so a wrong
+/// frame or an extra view shows up in the log.
+#[cfg(target_os = "macos")]
+fn clip_panel<R: Runtime>(wv: &tauri::Webview<R>, log_frames: bool) {
+    use objc2_app_kit::NSView;
+    use objc2_web_kit::WKWebView;
+
+    fn rect(v: &NSView) -> String {
+        let f = v.frame();
+        format!("x={} y={} w={} h={}", f.origin.x, f.origin.y, f.size.width, f.size.height)
+    }
+    fn class_name(v: &NSView) -> String {
+        v.class().name().to_string_lossy().into_owned()
+    }
+    /// Hide Tahoe's scroll pockets anywhere inside the panel.
+    unsafe fn hide_pockets(v: &NSView, label: &str) {
+        for sub in v.subviews().iter() {
+            let name = class_name(&sub);
+            if name.contains("ScrollPocket") {
+                log::info!("[{label}] hiding {name} {}", rect(&sub));
+                sub.setHidden(true);
+            }
+            hide_pockets(&sub, label);
+        }
+    }
+
+    let label = wv.label().to_string();
+    let _ = wv.with_webview(move |pw| unsafe {
+        let view: &WKWebView = &*(pw.inner() as *const WKWebView);
+        view.setClipsToBounds(true);
+        // WebKit may also inset/extend the page for a title bar it thinks
+        // overlaps the view. The panels never sit under the title bar.
+        let sel = objc2::sel!(_setAutomaticallyAdjustsContentInsets:);
+        if objc2_foundation::NSObjectProtocol::respondsToSelector(view, sel) {
+            let _: () = objc2::msg_send![view, _setAutomaticallyAdjustsContentInsets: false];
+        }
+        hide_pockets(view, &label);
+        if !log_frames {
+            return;
+        }
+        match view.superview() {
+            Some(sv) => {
+                let siblings: Vec<String> =
+                    sv.subviews().iter().map(|v| format!("{}({})", class_name(&v), rect(&v))).collect();
+                log::info!(
+                    "[{label}] frame {} in parent {} flipped={} clips={}; parent subviews: {}",
+                    rect(view), rect(&sv), sv.isFlipped(), view.clipsToBounds(), siblings.join(", ")
+                );
+            }
+            None => log::info!("[{label}] frame {} (no parent)", rect(view)),
+        }
+    });
 }
 
 /// Portable mode: every webview (host and panels) uses the WebView2 user
