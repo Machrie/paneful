@@ -335,6 +335,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
         .on_page_load(|wv, _| {
             let z = panel_zoom(&wv.app_handle().state::<AppState>(), wv.label());
             if let Some(z) = z.filter(|z| *z != 1.0) {
+                log::info!("[{}] page load: zoom {}% again", wv.label(), zoom::percent(z));
                 let _ = wv.set_zoom(z);
             }
         })
@@ -394,6 +395,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
     )?;
 
     if acc.zoom != 1.0 {
+        log::info!("[{}] created at zoom {}%", wv.label(), zoom::percent(acc.zoom));
         let _ = wv.set_zoom(acc.zoom);
     }
     #[cfg(windows)]
@@ -609,7 +611,7 @@ fn purge_pending_profiles(app: &tauri::App, s: &mut Settings) {
 
 // ---------------------------------------------------------------- commands
 // The host webview may call these (capabilities/host.json); x.com panels only
-// panel_focused, panel_unread, shortcut, panel_keys, panel_xkeys, paste_link, open_link, send_link and capture_begin/shot/drop/finish
+// panel_focused, panel_unread, panel_view, shortcut, panel_keys, panel_xkeys, paste_link, open_link, send_link and capture_begin/shot/drop/finish
 // (capabilities/panel.json). Commands are async
 // because add_child from a sync command deadlocks on WebView2.
 
@@ -692,6 +694,21 @@ async fn panel_unread(app: AppHandle, state: State<'_, AppState>, webview: Webvi
     Ok(())
 }
 
+/// The calling panel's page scale changed by itself or by the app (panel.js
+/// watches devicePixelRatio, visualViewport.scale and the CSS width). Log
+/// only: next to the app's own zoom lines it tells an app zoom from one the
+/// webview did on its own (pinch magnification, a system zoom, ...).
+#[tauri::command]
+async fn panel_view(state: State<'_, AppState>, webview: Webview, dpr: f64, scale: f64, w: f64) -> Result<(), String> {
+    let z = panel_zoom(&state, webview.label()).ok_or("not a panel")?;
+    log::info!(
+        "[{}] view: devicePixelRatio {dpr:.3}, viewport scale {scale:.3}, css width {w:.0} (app zoom {}%)",
+        webview.label(),
+        zoom::percent(z)
+    );
+    Ok(())
+}
+
 /// Panel webview got keyboard focus (click, Tab, or focus_account).
 /// Called from PANEL_JS; the caller is identified by its webview label,
 /// not by anything the page sends.
@@ -728,10 +745,19 @@ async fn shortcut(
     webview: Webview,
     action: String,
     index: Option<usize>,
+    via: Option<String>,
 ) -> Result<(), String> {
     // Paired start/end lines: after a hang, a start without its end in
     // paneful.log names the shortcut that got stuck.
-    log::info!("shortcut {action} {index:?}: start");
+    // `via`: what the caller says set it off (panel.js: "wheel ..." for the
+    // wheel zoom), for the log only. Cut short and kept to plain text.
+    let via: String = via
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_graphic() || *c == ' ')
+        .take(80)
+        .collect();
+    log::info!("shortcut {action} {index:?} from {} {via}: start", webview.label());
     let caller = panel_id(&state, webview.label());
     let r = run_shortcut(&app, &state, &action, index, caller);
     log::info!("shortcut {action}: end");
@@ -779,6 +805,12 @@ fn zoom_panel<R: Runtime>(app: &AppHandle<R>, state: &AppState, id: Uuid, dir: i
         let Some(acc) = s.accounts.iter_mut().find(|a| a.id == id) else { return };
         let z = zoom::step(acc.zoom, dir);
         let changed = acc.zoom != z;
+        log::info!(
+            "[{label}] zoom {}% -> {}% (dir {dir}{})",
+            zoom::percent(acc.zoom),
+            zoom::percent(z),
+            if changed { "" } else { ", at limit" }
+        );
         acc.zoom = z;
         (z, changed.then(|| s.clone()))
     };
@@ -1628,6 +1660,12 @@ pub fn run() {
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
+                // Default is 40 KB and KeepOne: the file is wiped when full,
+                // and the per-relayout diagnostics fill 40 KB in minutes, so
+                // what happened before was gone by the time anyone looked.
+                // 2 MB, and the last 3 full files kept (renamed with a date).
+                .max_file_size(2_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3))
                 .targets([
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
                     tauri_plugin_log::Target::new(log_target),
@@ -1757,6 +1795,7 @@ pub fn run() {
             remove_account,
             panel_focused,
             panel_unread,
+            panel_view,
             shortcut,
             panel_keys,
             panel_xkeys,

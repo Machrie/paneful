@@ -13,6 +13,7 @@ fn main() {
             "remove_account",
             "panel_focused",
             "panel_unread",
+            "panel_view",
             "shortcut",
             "panel_keys",
             "panel_xkeys",
