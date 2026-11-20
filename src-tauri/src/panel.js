@@ -59,9 +59,12 @@
   };
 
   const capturing = () => !!window[Symbol.for("paneful.capturing")];
-  // Ctrl/Cmd + wheel (and a trackpad pinch, which arrives as Ctrl + wheel):
-  // the same zoom steps as the keys. One step per notch, at most one per
-  // 80 ms, so a fast trackpad doesn't run through every level at once.
+  // Ctrl + wheel (Windows) / Cmd + wheel (macOS): the same zoom steps as the
+  // keys. One step per notch, at most one per 80 ms, so a fast wheel doesn't
+  // run through every level at once.
+  // macOS: a trackpad pinch reaches the page as Ctrl + wheel with no key
+  // held, so a light brush of two fingers zoomed the panel (and the level is
+  // saved). Ctrl + wheel there is swallowed and does nothing; only Cmd zooms.
   let wheelSum = 0;
   let wheelAt = 0;
   window.addEventListener(
@@ -69,6 +72,7 @@
     (e) => {
       if (!(e.ctrlKey || (mac && e.metaKey))) return;
       e.preventDefault();
+      if (mac && !e.metaKey) return;
       if (capturing()) return;
       wheelSum += e.deltaMode === 0 ? e.deltaY : e.deltaY * 40;
       const now = Date.now();
