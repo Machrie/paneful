@@ -13,6 +13,7 @@
   "permissions": [
     "allow-panel-focused",
     "allow-panel-unread",
+    "allow-panel-view",
     "allow-shortcut",
     "allow-panel-keys",
     "allow-panel-xkeys",

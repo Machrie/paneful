@@ -17,7 +17,7 @@
 // 7. X's own shortcuts moved in settings: outside text fields, the user's
 //    key is swallowed and X gets its own key instead; X's old key is
 //    swallowed once moved or turned off.
-// The panel capability only allows `panel_focused`, `panel_unread`, `shortcut`,
+// The panel capability only allows `panel_focused`, `panel_unread`, `panel_view` (log only), `shortcut`,
 // `panel_keys` / `panel_xkeys` (read the configured bindings), `paste_link`, `open_link`,
 // `send_link` and, for capture.js,
 // `capture_begin` / `capture_shot` / `capture_drop` / `capture_finish`.
@@ -65,24 +65,56 @@
   // macOS: a trackpad pinch reaches the page as Ctrl + wheel with no key
   // held, so a light brush of two fingers zoomed the panel (and the level is
   // saved). Ctrl + wheel there is swallowed and does nothing; only Cmd zooms.
+  // Settings can turn the wheel zoom off (default off on macOS). Off, the
+  // wheel is left alone and just scrolls.
+  let wheelZoom = /*WHEEL*/true;
+  window.addEventListener("paneful-wheel", (e) => (wheelZoom = e.detail === true));
   let wheelSum = 0;
   let wheelAt = 0;
   window.addEventListener(
     "wheel",
     (e) => {
       if (!(e.ctrlKey || (mac && e.metaKey))) return;
+      if (mac && !e.metaKey) {
+        e.preventDefault(); // pinch: swallowed, see above
+        return;
+      }
+      if (!wheelZoom) return;
       e.preventDefault();
-      if (mac && !e.metaKey) return;
       if (capturing()) return;
       wheelSum += e.deltaMode === 0 ? e.deltaY : e.deltaY * 40;
       const now = Date.now();
       if (Math.abs(wheelSum) < 40 || now - wheelAt < 80) return;
-      call("shortcut", { action: wheelSum < 0 ? "zoom_in" : "zoom_out" }).catch(() => {});
+      const via = `wheel dy ${Math.round(wheelSum)} mode ${e.deltaMode} ctrl ${+e.ctrlKey} meta ${+e.metaKey}`;
+      call("shortcut", { action: wheelSum < 0 ? "zoom_in" : "zoom_out", via }).catch(() => {});
       wheelSum = 0;
       wheelAt = now;
     },
     { capture: true, passive: false },
   );
+
+  // Page scale, for paneful.log: when devicePixelRatio, the pinch scale or
+  // the CSS width moves, tell Rust (log only, see panel_view). Next to the
+  // app's own zoom lines this tells an app zoom from one WebKit / WebView2
+  // did on its own.
+  let viewSent = "";
+  const reportView = () => {
+    const dpr = window.devicePixelRatio || 1;
+    const scale = (window.visualViewport && window.visualViewport.scale) || 1;
+    const w = window.innerWidth;
+    const k = `${dpr.toFixed(3)} ${scale.toFixed(3)} ${w}`;
+    if (k === viewSent) return;
+    viewSent = k;
+    call("panel_view", { dpr, scale, w }).catch(() => (viewSent = ""));
+  };
+  let viewTimer = 0;
+  const viewSoon = () => {
+    clearTimeout(viewTimer);
+    viewTimer = setTimeout(reportView, 300);
+  };
+  window.addEventListener("resize", viewSoon);
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", viewSoon);
+  window.addEventListener("load", viewSoon);
 
   window.addEventListener(
     "keydown",
@@ -97,7 +129,7 @@
       if (e.repeat && ["bar", "help", "settings", "capture", "zoom", "send", "reload"].includes(a.action)) return;
       // This page knows which post is meant; Rust only opens it.
       if (a.action === "send") startPick();
-      else call("shortcut", a).catch(() => {});
+      else call("shortcut", { ...a, via: `key ${e.code}` }).catch(() => {});
     },
     true,
   );

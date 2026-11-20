@@ -94,6 +94,15 @@ pub struct Settings {
     /// window title's "(3)" goes with it. Off: counts only in the tooltip.
     #[serde(default = "yes")]
     pub unread_badge: bool,
+    /// Ctrl + wheel (Windows) / Cmd + wheel (macOS) zooms a panel. Off by
+    /// default on macOS: with Cmd held for another shortcut, a brush of the
+    /// trackpad is a wheel and ran the zoom up and down. The keys stay.
+    #[serde(default = "wheel_zoom_default")]
+    pub wheel_zoom: bool,
+}
+
+pub fn wheel_zoom_default() -> bool {
+    !cfg!(target_os = "macos")
 }
 
 fn yes() -> bool {
@@ -136,6 +145,7 @@ impl Default for Settings {
             skip_version: None,
             rules_update: true,
             unread_badge: true,
+            wheel_zoom: wheel_zoom_default(),
         }
     }
 }
@@ -206,6 +216,7 @@ impl Settings {
             skip_version: field(&v, "skip_version"),
             rules_update: v.get("rules_update").and_then(|x| x.as_bool()).unwrap_or(true),
             unread_badge: v.get("unread_badge").and_then(|x| x.as_bool()).unwrap_or(true),
+            wheel_zoom: v.get("wheel_zoom").and_then(|x| x.as_bool()).unwrap_or_else(wheel_zoom_default),
         })
     }
 
@@ -371,6 +382,7 @@ mod tests {
         assert!(l.update_check && l.skip_version.is_none());
         assert!(l.rules_update);
         assert!(l.unread_badge);
+        assert_eq!(l.wheel_zoom, wheel_zoom_default());
     }
 
     #[test]

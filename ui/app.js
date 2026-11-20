@@ -156,6 +156,10 @@ $("rules-check").onclick = () => invoke("check_rules").catch((e) => settingsMsg(
 $("rules-auto").onchange = (e) =>
   invoke("set_rules_update", { on: e.target.checked }).catch((err) => settingsMsg(err, true));
 
+// ---- Modifier + wheel zooms a panel (settings section)
+$("wheel-zoom").onchange = (e) =>
+  invoke("set_wheel_zoom", { on: e.target.checked }).catch((err) => settingsMsg(err, true));
+
 // ---- Unread badges on the tray / taskbar / Dock icons (settings section)
 $("badge-auto").onchange = (e) =>
   invoke("set_unread_badge", { on: e.target.checked }).catch((err) => settingsMsg(err, true));
@@ -216,6 +220,10 @@ function render() {
   renderUpdate();
   renderRules();
   $("badge-auto").checked = L.unread_badge !== false;
+  if ($("wheel-zoom").checked !== !!L.wheel_zoom) {
+    $("wheel-zoom").checked = !!L.wheel_zoom;
+    buildKeys();
+  }
   place();
 }
 
@@ -480,7 +488,8 @@ function fillKeys(dl, rows) {
 function buildKeys() {
   const dl = $("app-keys");
   dl.replaceChildren();
-  const rows = [[[MOD, "1–9"], "N번째 패널로 포커스"], [[MOD, "V"], PASTE_LABEL], [[MOD, "휠"], WHEEL_LABEL]];
+  const rows = [[[MOD, "1–9"], "N번째 패널로 포커스"], [[MOD, "V"], PASTE_LABEL]];
+  if (L.wheel_zoom) rows.push([[MOD, "휠"], WHEEL_LABEL]);
   for (const k of L.keys) if (k.caps.length) rows.push([k.caps, KEY_LABELS[k.id]]);
   fillKeys(dl, rows);
   $("x-keys").replaceChildren();

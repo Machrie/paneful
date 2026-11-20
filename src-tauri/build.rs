@@ -13,6 +13,7 @@ fn main() {
             "remove_account",
             "panel_focused",
             "panel_unread",
+            "panel_view",
             "shortcut",
             "panel_keys",
             "panel_xkeys",
@@ -43,6 +44,7 @@ fn main() {
             "check_rules",
             "set_rules_update",
             "set_unread_badge",
+            "set_wheel_zoom",
         ]),
     ))
     .expect("failed to run tauri-build");

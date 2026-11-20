@@ -159,6 +159,8 @@ struct LayoutPayload {
     rules_update: bool,
     /// Unread badges on the tray / taskbar / Dock icons.
     unread_badge: bool,
+    /// Modifier + wheel zooms a panel (settings checkbox).
+    wheel_zoom: bool,
     /// Rules in effect and the last check, for the settings screen.
     rules: rules::Status,
 }
@@ -334,6 +336,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
         skip_version: s.skip_version.clone(),
         rules_update: s.rules_update,
         unread_badge: s.unread_badge,
+        wheel_zoom: s.wheel_zoom,
         rules: rules_st,
     };
     let _ = app.emit_to(HOST, "layout", payload);
@@ -359,6 +362,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
             .replace("/*RULES*/null", &rules::json(&cur))
     };
     let x_json = x_keys_json(&app.state::<AppState>().settings.lock().unwrap());
+    let wheel = app.state::<AppState>().settings.lock().unwrap().wheel_zoom;
     let app2 = app.clone();
     let label = panel_label(acc);
     let label2 = label.clone();
@@ -366,7 +370,10 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(START_URL.parse().unwrap()))
         .data_store_identifier(acc.store_id())
         .initialization_script(rules_js)
-        .initialization_script(PANEL_JS.replace("/*KEYS*/null", keys_json).replace("/*XKEYS*/null", &x_json))
+        .initialization_script(PANEL_JS
+            .replace("/*KEYS*/null", keys_json)
+            .replace("/*XKEYS*/null", &x_json)
+            .replace("/*WHEEL*/true", if wheel { "true" } else { "false" }))
         .initialization_script(media::SCRIPT)
         .initialization_script(capture::SCRIPT)
         .initialization_script(LINKS_JS)
@@ -374,8 +381,13 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
         // when a page loads (Chromium keeps zoom per site). Same value again
         // is a no-op.
         .on_page_load(|wv, _| {
+            // The init script carries the wheel setting from when the panel
+            // was made; a reload after a change would bring the old one back.
+            let wheel = wv.app_handle().state::<AppState>().settings.lock().unwrap().wheel_zoom;
+            let _ = wv.eval(wheel_js(wheel));
             let z = panel_zoom(&wv.app_handle().state::<AppState>(), wv.label());
             if let Some(z) = z.filter(|z| *z != 1.0) {
+                log::info!("[{}] page load: zoom {}% again", wv.label(), zoom::percent(z));
                 let _ = wv.set_zoom(z);
             }
         })
@@ -435,6 +447,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
     )?;
 
     if acc.zoom != 1.0 {
+        log::info!("[{}] created at zoom {}%", wv.label(), zoom::percent(acc.zoom));
         let _ = wv.set_zoom(acc.zoom);
     }
     #[cfg(windows)]
@@ -696,7 +709,7 @@ fn purge_pending_profiles(app: &tauri::App, s: &mut Settings) {
 
 // ---------------------------------------------------------------- commands
 // The host webview may call these (capabilities/host.json); x.com panels only
-// panel_focused, panel_unread, shortcut, panel_keys, panel_xkeys, paste_link, open_link, send_link and capture_begin/shot/drop/finish
+// panel_focused, panel_unread, panel_view, shortcut, panel_keys, panel_xkeys, paste_link, open_link, send_link and capture_begin/shot/drop/finish
 // (capabilities/panel.json). Commands are async
 // because add_child from a sync command deadlocks on WebView2.
 
@@ -779,6 +792,21 @@ async fn panel_unread(app: AppHandle, state: State<'_, AppState>, webview: Webvi
     Ok(())
 }
 
+/// The calling panel's page scale changed by itself or by the app (panel.js
+/// watches devicePixelRatio, visualViewport.scale and the CSS width). Log
+/// only: next to the app's own zoom lines it tells an app zoom from one the
+/// webview did on its own (pinch magnification, a system zoom, ...).
+#[tauri::command]
+async fn panel_view(state: State<'_, AppState>, webview: Webview, dpr: f64, scale: f64, w: f64) -> Result<(), String> {
+    let z = panel_zoom(&state, webview.label()).ok_or("not a panel")?;
+    log::info!(
+        "[{}] view: devicePixelRatio {dpr:.3}, viewport scale {scale:.3}, css width {w:.0} (app zoom {}%)",
+        webview.label(),
+        zoom::percent(z)
+    );
+    Ok(())
+}
+
 /// Panel webview got keyboard focus (click, Tab, or focus_account).
 /// Called from PANEL_JS; the caller is identified by its webview label,
 /// not by anything the page sends.
@@ -815,10 +843,19 @@ async fn shortcut(
     webview: Webview,
     action: String,
     index: Option<usize>,
+    via: Option<String>,
 ) -> Result<(), String> {
     // Paired start/end lines: after a hang, a start without its end in
     // paneful.log names the shortcut that got stuck.
-    log::info!("shortcut {action} {index:?}: start");
+    // `via`: what the caller says set it off (panel.js: "wheel ..." for the
+    // wheel zoom), for the log only. Cut short and kept to plain text.
+    let via: String = via
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_graphic() || *c == ' ')
+        .take(80)
+        .collect();
+    log::info!("shortcut {action} {index:?} from {} {via}: start", webview.label());
     let caller = panel_id(&state, webview.label());
     let r = run_shortcut(&app, &state, &action, index, caller);
     log::info!("shortcut {action}: end");
@@ -866,6 +903,12 @@ fn zoom_panel<R: Runtime>(app: &AppHandle<R>, state: &AppState, id: Uuid, dir: i
         let Some(acc) = s.accounts.iter_mut().find(|a| a.id == id) else { return };
         let z = zoom::step(acc.zoom, dir);
         let changed = acc.zoom != z;
+        log::info!(
+            "[{label}] zoom {}% -> {}% (dir {dir}{})",
+            zoom::percent(acc.zoom),
+            zoom::percent(z),
+            if changed { "" } else { ", at limit" }
+        );
         acc.zoom = z;
         (z, changed.then(|| s.clone()))
     };
@@ -1667,6 +1710,30 @@ async fn set_unread_badge(app: AppHandle, state: State<'_, AppState>, on: bool) 
     Ok(())
 }
 
+/// Tell a panel whether modifier + wheel zooms (panel.js `paneful-wheel`).
+fn wheel_js(on: bool) -> String {
+    format!("window.dispatchEvent(new CustomEvent('paneful-wheel',{{detail:{on}}}))")
+}
+
+/// Settings checkbox: Ctrl/Cmd + wheel zooms a panel. The zoom keys stay.
+#[tauri::command]
+async fn set_wheel_zoom(app: AppHandle, state: State<'_, AppState>, on: bool) -> Result<(), String> {
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        s.wheel_zoom = on;
+        s.clone()
+    };
+    state.save(&snapshot);
+    log::info!("wheel zoom {on}");
+    for acc in &snapshot.accounts {
+        if let Some(wv) = app.get_webview(&panel_label(acc)) {
+            let _ = wv.eval(wheel_js(on));
+        }
+    }
+    relayout(&app);
+    Ok(())
+}
+
 /// Release page in the system browser.
 #[tauri::command]
 async fn open_update(app: AppHandle) -> Result<(), String> {
@@ -1715,6 +1782,12 @@ pub fn run() {
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
+                // Default is 40 KB and KeepOne: the file is wiped when full,
+                // and the per-relayout diagnostics fill 40 KB in minutes, so
+                // what happened before was gone by the time anyone looked.
+                // 2 MB, and the last 3 full files kept (renamed with a date).
+                .max_file_size(2_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3))
                 .targets([
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
                     tauri_plugin_log::Target::new(log_target),
@@ -1849,6 +1922,7 @@ pub fn run() {
             remove_account,
             panel_focused,
             panel_unread,
+            panel_view,
             shortcut,
             panel_keys,
             panel_xkeys,
@@ -1878,7 +1952,8 @@ pub fn run() {
             panel_rules,
             check_rules,
             set_rules_update,
-            set_unread_badge
+            set_unread_badge,
+            set_wheel_zoom
         ])
         .run(tauri::generate_context!())
         .expect("error while running paneful");
