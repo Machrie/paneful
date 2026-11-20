@@ -177,15 +177,56 @@ fn top_of(s: &Settings) -> f64 {
     }
 }
 
+/// Size the app lays out in: the window's inner size minus the title bar
+/// area that the content view reaches under (macOS, see `titlebar`).
 fn logical_size<R: Runtime>(window: &Window<R>) -> (f64, f64) {
     let scale = window.scale_factor().unwrap_or(1.0);
     match window.inner_size() {
         Ok(s) => {
             let l = s.to_logical::<f64>(scale);
-            (l.width, l.height)
+            (l.width, (l.height - titlebar()).max(0.0))
         }
         Err(_) => (1280.0, 860.0),
     }
+}
+
+/// macOS: the content view can cover the title bar (seen on macOS 27: content
+/// view 1470x923 = whole window, contentLayoutRect 891 high). Then
+/// inner_size counts the title bar too, and everything laid out from y=0
+/// sat under it: the 6pt strip and most of the top bar were hidden, and
+/// WebKit inset the panels' pages by the rest (26pt), which put the X page
+/// right where the strip should be. Every webview is placed this much lower,
+/// and the layout height is that much smaller. Stored as f64 bits; 0 elsewhere.
+static TITLEBAR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn titlebar() -> f64 {
+    f64::from_bits(TITLEBAR.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Re-read the title bar height. Main thread only (AppKit). True if it changed.
+#[cfg(target_os = "macos")]
+fn measure_titlebar<R: Runtime>(window: &Window<R>) -> bool {
+    use objc2_app_kit::NSWindow;
+    let Ok(ptr) = window.ns_window() else { return false };
+    let t = unsafe {
+        let w: &NSWindow = &*(ptr as *const NSWindow);
+        let Some(cv) = w.contentView() else { return false };
+        let full = cv.frame().size.height;
+        let lr = w.contentLayoutRect();
+        // Unflipped window coordinates: the covered part is on top.
+        (full - (lr.origin.y + lr.size.height)).clamp(0.0, full / 2.0)
+    };
+    let old = TITLEBAR.swap(t.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    if f64::from_bits(old) != t {
+        log::info!("title bar over content: {t}pt");
+        return true;
+    }
+    false
+}
+
+#[cfg(not(target_os = "macos"))]
+fn measure_titlebar<R: Runtime>(_window: &Window<R>) -> bool {
+    false
 }
 
 /// Recompute every rect, move the webviews, tell the host UI.
@@ -232,7 +273,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
 
     if let Some(host) = app.get_webview(HOST) {
         let _ = host.set_bounds(tauri::Rect {
-            position: LogicalPosition::new(0.0, 0.0).into(),
+            position: LogicalPosition::new(0.0, titlebar()).into(),
             size: LogicalSize::new(w, h).into(),
         });
     }
@@ -240,7 +281,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
     for (acc, r) in s.accounts.iter().zip(rects.iter()) {
         if let Some(wv) = app.get_webview(&panel_label(acc)) {
             let _ = wv.set_bounds(tauri::Rect {
-                position: LogicalPosition::new(r.x, r.y).into(),
+                position: LogicalPosition::new(r.x, r.y + titlebar()).into(),
                 size: LogicalSize::new(r.w, r.h).into(),
             });
         }
@@ -389,7 +430,7 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
 
     let wv = window.add_child(
         with_udf(builder),
-        LogicalPosition::new(rect.x, rect.y),
+        LogicalPosition::new(rect.x, rect.y + titlebar()),
         LogicalSize::new(rect.w, rect.h),
     )?;
 
@@ -1740,6 +1781,7 @@ pub fn run() {
                 // X's dark theme and the host UI.
                 .theme(Some(tauri::Theme::Dark))
                 .build()?;
+            measure_titlebar(&window);
             let (w, h) = logical_size(&window);
             // Not fatal: without a tray icon the app still works, it just
             // can't be hidden from the top bar button (see tray::hide).
@@ -1761,7 +1803,7 @@ pub fn run() {
             // in the top bar and in the gaps between panels.
             window.add_child(
                 with_udf(WebviewBuilder::new(HOST, WebviewUrl::App("index.html".into()))),
-                LogicalPosition::new(0.0, 0.0),
+                LogicalPosition::new(0.0, titlebar()),
                 LogicalSize::new(w, h),
             )?;
 
@@ -1778,8 +1820,12 @@ pub fn run() {
             }
 
             let handle = app.handle().clone();
+            let win = window.clone();
             window.on_window_event(move |e| {
-                if matches!(e, WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }) {
+                // Runs on the main thread. The title bar area can change
+                // (full screen) or only settle once the window is shown.
+                let moved = measure_titlebar(&win);
+                if moved || matches!(e, WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }) {
                     relayout(&handle);
                 }
             });
