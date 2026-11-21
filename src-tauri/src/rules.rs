@@ -51,6 +51,7 @@ pub const SELECTORS: &[&str] = &[
     "postText",
     "socialContext",
     "quoteBox",
+    "actionBar",
     "photo",
     "video",
     "notifLink",

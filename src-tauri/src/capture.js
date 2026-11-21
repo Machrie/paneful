@@ -72,6 +72,17 @@
     return { handle, name, nameEl, handleEl: hs };
   }
 
+  // "x.com/handle/status/id" of a post, from its own time link.
+  function linkOf(article) {
+    const key = keyOf(article);
+    for (const t of article.querySelectorAll("time")) {
+      const a = t.closest("a");
+      const m = a && STATUS_RE.exec(new URL(a.href, location.href).pathname);
+      if (m && m[2] === key) return `x.com/${m[1]}/status/${m[2]}`;
+    }
+    return "";
+  }
+
   function quoteBoxOf(article) {
     const names = article.querySelectorAll(S("userName"));
     for (let i = 1; i < names.length; i++) {
@@ -563,6 +574,23 @@
   }
 
   // ------------------------------------------------ shoot pass
+  // Where a post ends in the picture. Under the action bar of the post a
+  // page is about, X puts its own rows (reply sort "관련 있음", "인용 보기");
+  // they are not part of the post, so the picture stops a little under the
+  // action bar. Anything else keeps its full height.
+  function endOf(a, r) {
+    const qbox = quoteBoxOf(a);
+    let bar = null;
+    for (const g of a.querySelectorAll(S("actionBar"))) {
+      if (qbox && qbox.contains(g)) continue;
+      const b = g.getBoundingClientRect();
+      if (b.height > 0 && (!bar || b.bottom > bar.bottom)) bar = b;
+    }
+    if (!bar) return r.bottom;
+    const end = bar.bottom + 12;
+    return end < r.bottom - 8 ? end : r.bottom;
+  }
+
   // Rectangles of the posts in `keys` visible now, from the cursor down.
   // cursor = { i: index in keys, off: px of that post already taken }
   function plan(keys, cur) {
@@ -574,17 +602,18 @@
       const a = byKey.get(keys[i]);
       if (!a) break; // not rendered yet: scroll on
       const r = a.getBoundingClientRect();
+      const end = endOf(a, r);
       const off = i === cur.i ? cur.off : 0;
-      if (off >= r.height - 0.5) {
+      if (off >= end - r.top - 0.5) {
         next = { i: i + 1, off: 0 };
         continue;
       }
       const top = r.top + off;
       if (top >= vh - 1) break;
       if (top < -1) return null; // part of it is above the screen: re-scroll
-      const bottom = Math.min(r.bottom, vh);
+      const bottom = Math.min(end, vh);
       crops.push({ x: r.left, y: top, w: r.width, h: bottom - top, a });
-      if (bottom < r.bottom - 0.5) {
+      if (bottom < end - 0.5) {
         next = { i, off: off + (bottom - top) };
         break;
       }
@@ -606,13 +635,38 @@
     return parts.join(",");
   }
 
-  async function shot(crops, anon) {
+  async function shot(crops, anon, link) {
     const res = await call("capture_shot", {
       viewW: window.innerWidth,
       anon,
       crops: crops.map(({ x, y, w, h }) => ({ x, y, w, h })),
+      link: !!link,
     });
     return res;
+  }
+
+  // The first post's link, as a line of text in X's font and its gray, on
+  // the page background, shot in the overlay at the top of the column.
+  // Rust puts it under the plain version only: a link names the author, so
+  // the 익명 version never gets it. Text in a picture: it can't be clicked.
+  async function shootLink(text, col, look) {
+    const h = 40;
+    const d = document.createElement("div");
+    css(
+      d,
+      `position:fixed;left:${col.left}px;top:0;width:${col.width}px;height:${h}px;box-sizing:border-box;` +
+        `padding:0 16px;background:${pageBg()};color:${look.color};font-family:${look.font};font-size:14px;` +
+        `line-height:${h}px;white-space:nowrap;overflow:hidden;`,
+    );
+    d.textContent = text;
+    banner.style.display = "none";
+    maskLayer.replaceChildren(d);
+    await frames();
+    try {
+      await shot([{ x: col.left, y: 0, w: col.width, h }], false, true);
+    } finally {
+      maskLayer.replaceChildren();
+    }
   }
 
   async function shootStep(keys, cur, P) {
@@ -674,6 +728,12 @@
       begun = true;
       const firstArt = await findArticle(top);
       if (!firstArt) throw new Error("첫 게시물을 다시 찾지 못했다");
+      const link = linkOf(firstArt);
+      const time = firstArt.querySelector("time");
+      const look = {
+        color: getComputedStyle(time || firstArt).color,
+        font: getComputedStyle(firstArt).fontFamily,
+      };
       let cur = { i: 0, off: 0 };
       let full = false;
       let stuck = 0;
@@ -700,6 +760,8 @@
         cur = r.next;
         full = r.full;
       }
+      if (abort) return;
+      if (link) await shootLink(link, col, look);
       if (abort) return;
       await call("capture_finish", {
         cssW: col.width,
