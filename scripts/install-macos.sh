@@ -53,6 +53,14 @@ curl -fL --progress-bar -o "$dmg" \
   "https://github.com/$REPO/releases/download/$tag/Paneful_${ver}_universal.dmg" \
   || die "dmg 받기 실패"
 
+# curl normally leaves no quarantine flag, but a terminal app that sets
+# one on everything its children write would carry it into the mounted
+# volume and the copied app. Strip it from the dmg before mounting.
+xattr -d com.apple.quarantine "$dmg" 2>/dev/null || true
+
+# Own mount point in the temp folder: an older Paneful dmg still mounted at
+# /Volumes/Paneful would push this one to "Paneful 2", and copying from
+# /Volumes/Paneful would pick up the old (browser-downloaded) app.
 mkdir "$mnt"
 hdiutil attach -nobrowse -noautoopen -readonly -quiet -mountpoint "$mnt" "$dmg" </dev/null \
   || die "dmg 열기 실패"
@@ -77,8 +85,12 @@ fi
 [ -w /Applications ] || die "/Applications에 쓸 권한이 없음 (관리자 계정으로 실행)"
 rm -rf "$APP"
 ditto "$mnt/Paneful.app" "$APP" || die "응용 프로그램 폴더에 복사 실패"
-# curl leaves no quarantine flag, but an older copy may have had one.
+# Belt and braces: no quarantine flag on the installed app, whatever
+# happened above. Without it Gatekeeper doesn't stop the app.
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+if xattr -r "$APP" 2>/dev/null | grep -q com.apple.quarantine; then
+  say "주의: 격리 표시가 안 지워짐. 경고창이 뜨면: xattr -dr com.apple.quarantine $APP"
+fi
 
 say "v$ver 설치 완료, 실행합니다"
 open "$APP"
