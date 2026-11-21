@@ -96,13 +96,20 @@
       </section>
       <section>
         <h2>새 버전</h2>
-        <p class="hint">GitHub에 새 버전이 올라오면 상단 바와 트레이 메뉴에 표시. 설치는 직접 (받기를 누르면 릴리스 페이지가 열림). 지금 버전 <b id="cur-ver"></b></p>
+        <p class="hint"><span id="up-hint">GitHub에 새 버전이 올라오면 상단 바와 트레이 메뉴에 표시. 설치는 직접 (받기를 누르면 릴리스 페이지가 열림).</span> 지금 버전 <b id="cur-ver"></b></p>
         <label class="check"><input type="checkbox" id="up-auto"> 시작할 때와 6시간마다 확인</label>
         <div class="dirrow uprow">
           <span id="up-state"></span>
           <button id="up-open" class="pill primary" hidden>받기</button>
           <button id="up-skip" class="pill" hidden>이 버전 건너뛰기</button>
           <button id="up-check" class="pill">지금 확인</button>
+        </div>
+        <div id="mac-install" hidden>
+          <p class="hint uprow">업데이트 버튼이 안 되거나 처음 설치할 땐 터미널에 아래 한 줄. 하는 일은 같다. 브라우저를 안 거쳐서 경고창이 안 뜬다.</p>
+          <div class="dirrow">
+            <code id="install-cmd">curl -fsSL https://raw.githubusercontent.com/Machrie/paneful/main/scripts/install-macos.sh | bash</code>
+            <button id="install-copy" class="pill">복사</button>
+          </div>
         </div>
       </section>
       <section>
