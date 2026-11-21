@@ -7,13 +7,25 @@
 # opens without the Gatekeeper warning), quits a running Paneful, replaces
 # /Applications/Paneful.app and starts it again. Settings and logins live
 # in ~/Library and are not touched.
+#
+# The app's own "업데이트" button runs this same script (embedded at build
+# time, update.rs) with PANEFUL_WAIT_PID set to the app's pid: then the
+# script prints READY once the new app is downloaded and mounted, the app
+# quits itself, and the script waits for that pid instead of asking the app
+# to quit. Everything after READY goes to PANEFUL_LOG.
 set -euo pipefail
 
 REPO="Machrie/paneful"
 APP="/Applications/Paneful.app"
 
 say() { printf '%s\n' "$*"; }
-die() { printf '실패: %s\n' "$*" >&2; exit 1; }
+quit_done=0
+die() {
+  printf '실패: %s\n' "$*" >&2
+  # The app was closed for the update: bring back whatever is installed.
+  if [ "$quit_done" = 1 ] && [ -d "$APP" ]; then open "$APP" || true; fi
+  exit 1
+}
 
 [ "$(uname -s)" = "Darwin" ] || die "맥 전용 스크립트"
 
@@ -49,7 +61,9 @@ trap cleanup EXIT
 
 dmg="$tmp/Paneful.dmg"
 say "받는 중…"
-curl -fL --progress-bar -o "$dmg" \
+progress=--progress-bar
+[ -n "${PANEFUL_WAIT_PID:-}" ] && progress=-sS
+curl -fL "$progress" -o "$dmg" \
   "https://github.com/$REPO/releases/download/$tag/Paneful_${ver}_universal.dmg" \
   || die "dmg 받기 실패"
 
@@ -69,7 +83,18 @@ hdiutil attach -nobrowse -noautoopen -readonly -quiet -mountpoint "$mnt" "$dmg" 
 # Quit a running copy first. `quit app` would launch it when it is not
 # running, so only ask when the process exists.
 running() { pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1; }
-if running; then
+if [ -n "${PANEFUL_WAIT_PID:-}" ]; then
+  # Started by the app: it quits on READY. From here on the app's pipe is
+  # gone, so write to the log file only.
+  say READY
+  exec >>"${PANEFUL_LOG:-/dev/null}" 2>&1
+  trap '' HUP PIPE
+  for _ in $(seq 1 60); do
+    kill -0 "$PANEFUL_WAIT_PID" 2>/dev/null || break
+    sleep 0.5
+  done
+  kill -0 "$PANEFUL_WAIT_PID" 2>/dev/null && { kill "$PANEFUL_WAIT_PID" 2>/dev/null || true; sleep 1; }
+elif running; then
   say "실행 중인 Paneful 끄는 중…"
   osascript -e 'quit app "Paneful"' >/dev/null 2>&1 || true
   for _ in $(seq 1 20); do
@@ -82,6 +107,7 @@ if running; then
   fi
 fi
 
+quit_done=1
 [ -w /Applications ] || die "/Applications에 쓸 권한이 없음 (관리자 계정으로 실행)"
 # Copy next to the old app first; the old one goes only once the new copy
 # is complete, so a failed copy leaves the installed app as it was.

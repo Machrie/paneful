@@ -20,6 +20,8 @@ const settingsEl = $("settings");
 
 const mac = /Mac/.test(navigator.platform || navigator.userAgent);
 const MOD = mac ? "⌘" : "Ctrl";
+// New version button: macOS updates in place (update.rs), Windows opens the release page.
+const GET = mac ? "업데이트" : "받기";
 
 let L = null; // last layout payload from Rust
 let shape = ""; // panel ids/labels/colors the DOM was built for
@@ -95,8 +97,11 @@ function renderUpdate() {
   $("update-box").hidden = !n;
   $("update-mark").hidden = !n || L.bar;
   if (n) {
-    $("update").textContent = `v${n} 받기`;
-    $("update").title = `새 버전 v${n}: 릴리스 페이지 열기 (지금 v${L.version})`;
+    $("update").textContent = u.installing ? "업데이트 중…" : `v${n} ${GET}`;
+    $("update").disabled = !!u.installing;
+    $("update").title = mac
+      ? `새 버전 v${n}: 받아서 바꾸고 다시 켜기 (지금 v${L.version})`
+      : `새 버전 v${n}: 릴리스 페이지 열기 (지금 v${L.version})`;
   }
   stripTitle();
 
@@ -106,7 +111,11 @@ function renderUpdate() {
   const st = $("up-state");
   st.classList.remove("ok", "warn");
   const skipped = u.newer && L.skip_version === u.newer;
-  if (u.checking) st.textContent = "확인 중…";
+  if (u.installing) st.textContent = "새 버전 받는 중… 다 받으면 앱이 꺼졌다가 다시 켜진다";
+  else if (u.install_error) {
+    st.textContent = u.install_error;
+    st.classList.add("warn");
+  } else if (u.checking) st.textContent = "확인 중…";
   else if (u.error) {
     st.textContent = `확인 실패: ${u.error}`;
     st.classList.add("warn");
@@ -116,6 +125,7 @@ function renderUpdate() {
   } else if (u.up_to_date) st.textContent = "최신 버전";
   else st.textContent = L.update_check ? "아직 확인 안 함" : "확인 꺼짐";
   $("up-open").hidden = !u.newer;
+  $("up-open").disabled = !!u.installing;
   $("up-skip").hidden = !u.newer;
   $("up-skip").textContent = skipped ? "다시 알림" : "이 버전 건너뛰기";
 }
@@ -128,6 +138,10 @@ $("up-skip").onclick = () => {
   invoke("skip_update", { undo }).catch((e) => settingsMsg(e, true));
 };
 $("mac-install").hidden = !mac;
+$("up-open").textContent = GET;
+if (mac)
+  $("up-hint").textContent =
+    "GitHub에 새 버전이 올라오면 상단 바와 메뉴 막대 메뉴에 표시. 업데이트를 누르면 받아서 바꾸고 다시 켠다 (설정·로그인 그대로).";
 $("install-copy").onclick = () =>
   invoke("copy_install_cmd")
     .then(() => settingsMsg("복사됨. 터미널에 붙여넣고 Enter"))

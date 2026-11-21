@@ -220,7 +220,7 @@ fn menu<R: Runtime>(app: &AppHandle<R>, update: Option<&str>) -> tauri::Result<M
     let sep = PredefinedMenuItem::separator(app)?;
     match update {
         Some(v) => {
-            let up = MenuItem::with_id(app, "update", format!("새 버전 v{v} 받기"), true, None::<&str>)?;
+            let up = MenuItem::with_id(app, "update", format!("새 버전 v{v} {}", if cfg!(target_os = "macos") { "업데이트" } else { "받기" }), true, None::<&str>)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
             Menu::with_items(app, &[&up, &sep2, &toggle_item, &settings_item, &sep, &quit])
         }

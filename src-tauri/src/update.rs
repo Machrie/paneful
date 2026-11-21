@@ -1,7 +1,11 @@
 //! New version notice. Asks GitHub for the latest release and, when it is
 //! newer than this build, tells the host UI (top bar pill, strip marker,
-//! settings) and the tray menu. Notice only: the release page opens in the
-//! system browser, nothing is downloaded or installed here.
+//! settings) and the tray menu. Windows: notice only, the release page
+//! opens in the system browser. macOS: "업데이트" runs the install script
+//! (scripts/install-macos.sh, embedded) which downloads the dmg with curl,
+//! so the new app has no quarantine flag and opens without the Gatekeeper
+//! warning; the app quits once the download is ready and the script swaps
+//! the bundle and starts it again.
 //!
 //! The request goes out from Rust through the shared cookie-less client
 //! (media::client), never from a webview. Failures (offline, rate limit)
@@ -45,6 +49,10 @@ pub struct Status {
     pub up_to_date: bool,
     /// Last check failed (only shown in settings, after "지금 확인").
     pub error: Option<String>,
+    /// macOS: the install script is downloading the new version.
+    pub installing: bool,
+    /// macOS: why the last in-app update stopped (the app keeps running).
+    pub install_error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -206,8 +214,22 @@ pub fn spawn<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Release page of the version on offer (or the releases page).
+/// "받기" / "업데이트" (top bar, tray, settings). macOS installs in place,
+/// Windows opens the release page.
 pub fn open<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        install(app)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        open_page(app)
+    }
+}
+
+/// Release page of the version on offer (or the releases page).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn open_page<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let url = app
         .state::<AppState>()
         .update
@@ -217,6 +239,124 @@ pub fn open<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .clone()
         .unwrap_or_else(|| RELEASES.into());
     app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "macos")]
+const SCRIPT: &str = include_str!("../../scripts/install-macos.sh");
+
+/// Where the app must run from for an in-place update (the script replaces
+/// exactly this bundle).
+#[cfg(target_os = "macos")]
+const BUNDLE: &str = "/Applications/Paneful.app/";
+
+#[cfg(target_os = "macos")]
+fn set_install<R: Runtime>(app: &AppHandle<R>, installing: bool, error: Option<String>) {
+    {
+        let state = app.state::<AppState>();
+        let mut st = state.update.lock().unwrap();
+        st.installing = installing;
+        st.install_error = error;
+    }
+    publish(app);
+}
+
+/// Start the install script. Returns at once; the script's READY line
+/// (download done, dmg mounted) makes the app quit, any other ending is
+/// reported in settings and the app keeps running.
+#[cfg(target_os = "macos")]
+fn install<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    if !exe.to_string_lossy().starts_with(BUNDLE) {
+        return Err("응용 프로그램 폴더의 Paneful.app으로 실행할 때만 앱 안에서 업데이트된다. 설정의 터미널 한 줄을 써라".into());
+    }
+    {
+        let state = app.state::<AppState>();
+        let mut st = state.update.lock().unwrap();
+        if st.installing {
+            return Ok(());
+        }
+        st.installing = true;
+        st.install_error = None;
+    }
+    publish(app);
+
+    let mut cmd = Command::new("/bin/bash");
+    cmd.arg("-c")
+        .arg(SCRIPT)
+        .arg("paneful-update")
+        .env("PANEFUL_WAIT_PID", std::process::id().to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        // Own process group: nothing aimed at the app reaches the script.
+        .process_group(0);
+    if let Ok(dir) = app.path().app_log_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        cmd.env("PANEFUL_LOG", dir.join("update.log"));
+    }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("업데이트 시작 실패: {e}");
+            set_install(app, false, Some(msg.clone()));
+            return Err(msg);
+        }
+    };
+    log::info!("update: install script started (pid {})", child.id());
+
+    let stderr = child.stderr.take();
+    let err_thread = std::thread::spawn(move || {
+        let mut last = String::new();
+        if let Some(e) = stderr {
+            for line in BufReader::new(e).lines().map_while(Result::ok) {
+                log::info!("update script: {line}");
+                if !line.trim().is_empty() {
+                    last = line;
+                }
+            }
+        }
+        last
+    });
+    let stdout = child.stdout.take();
+    let app = app.clone();
+    let r = std::thread::Builder::new().name("update-install".into()).spawn(move || {
+        let mut last = String::new();
+        if let Some(o) = stdout {
+            for line in BufReader::new(o).lines().map_while(Result::ok) {
+                log::info!("update script: {line}");
+                if line.trim() == "READY" {
+                    log::info!("update: new version ready, quitting for the swap");
+                    log::logger().flush();
+                    app.exit(0);
+                    return;
+                }
+                if !line.trim().is_empty() {
+                    last = line;
+                }
+            }
+        }
+        let status = child.wait();
+        let err = err_thread.join().unwrap_or_default();
+        let ok = matches!(&status, Ok(s) if s.success());
+        log::info!("update: install script ended without swapping ({status:?})");
+        // Exit 0 without READY: nothing to do ("이미 최신 버전").
+        let msg = if ok {
+            if last.is_empty() { "업데이트할 게 없음".to_string() } else { last }
+        } else if err.is_empty() {
+            "업데이트 실패 (로그 확인)".to_string()
+        } else {
+            err
+        };
+        set_install(&app, false, Some(msg));
+    });
+    if let Err(e) = r {
+        log::warn!("update install thread not started: {e}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -249,6 +389,12 @@ mod tests {
         s.update_check = false;
         assert_eq!(notice(&s, &st), None);
         assert_eq!(notice(&crate::settings::Settings::default(), &Status::default()), None);
+    }
+
+    #[test]
+    fn install_script_has_app_mode() {
+        let s = include_str!("../../scripts/install-macos.sh");
+        assert!(s.contains("PANEFUL_WAIT_PID") && s.contains("say READY"));
     }
 
     #[test]
