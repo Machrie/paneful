@@ -42,7 +42,8 @@ ver=${tag#v}
 
 if [ -d "$APP" ]; then
   cur=$(defaults read "$APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)
-  if [ "$cur" = "$ver" ]; then
+  # PANEFUL_FORCE=1 reinstalls the same version (testing the swap).
+  if [ "$cur" = "$ver" ] && [ -z "${PANEFUL_FORCE:-}" ]; then
     say "이미 최신 버전 v$ver"
     exit 0
   fi
