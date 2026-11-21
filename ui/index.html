@@ -104,6 +104,13 @@
           <button id="up-skip" class="pill" hidden>이 버전 건너뛰기</button>
           <button id="up-check" class="pill">지금 확인</button>
         </div>
+        <div id="mac-install" hidden>
+          <p class="hint uprow">맥은 터미널에 아래 한 줄을 붙여넣으면 최신 버전을 받아 바꾸고 다시 켠다. 브라우저를 안 거쳐서 경고창이 안 뜨고, 설정·로그인은 그대로.</p>
+          <div class="dirrow">
+            <code id="install-cmd">curl -fsSL https://raw.githubusercontent.com/Machrie/paneful/main/scripts/install-macos.sh | bash</code>
+            <button id="install-copy" class="pill">복사</button>
+          </div>
+        </div>
       </section>
       <section>
         <h2>X 화면 규칙</h2>

@@ -1740,6 +1740,15 @@ async fn open_update(app: AppHandle) -> Result<(), String> {
     update::open(&app)
 }
 
+/// Settings "복사" (macOS): put the terminal install line on the clipboard.
+/// Fixed text only, the UI can't put anything else there.
+#[tauri::command]
+async fn copy_install_cmd(app: AppHandle) -> Result<(), String> {
+    tauri_plugin_clipboard_manager::ClipboardExt::clipboard(&app)
+        .write_text(update::INSTALL_MAC)
+        .map_err(|e| format!("복사 실패: {e}"))
+}
+
 // ---------------------------------------------------------------- entry
 
 /// Release builds abort on panic (Cargo.toml), so a panic kills the whole
@@ -1949,6 +1958,7 @@ pub fn run() {
             set_update_check,
             skip_update,
             open_update,
+            copy_install_cmd,
             panel_rules,
             check_rules,
             set_rules_update,

@@ -112,7 +112,7 @@ kbd { display: inline-block; min-width: 22px; padding: 3px 6px; border-radius: 6
 .sheet section { margin-bottom: 18px; }
 .hint { margin: -4px 0 10px; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .dirrow { display: flex; align-items: center; gap: 6px; }
-#save-dir { flex: 1; min-width: 0; padding: 6px 10px; border-radius: 8px; background: var(--surface);
+#save-dir, #install-cmd { flex: 1; min-width: 0; padding: 6px 10px; border-radius: 8px; background: var(--surface);
   border: 1px solid var(--line); font: 12px/1.3 ui-monospace, "SF Mono", Consolas, monospace;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; -webkit-user-select: text; }
 #key-rows, #xkey-rows { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px 8px; align-items: center; }
@@ -179,3 +179,4 @@ button.kcaps:hover { border-color: var(--line); background: var(--hover); }
 /* Bar hidden: a panel that was just brought back blinks in the strip. */
 #strip .seg.recovered { background: var(--danger); opacity: 1; animation: blink 1s ease-in-out 6; }
 @keyframes blink { 50% { opacity: .3; } }
+#install-cmd { white-space: normal; overflow-wrap: anywhere; }

@@ -127,6 +127,11 @@ $("up-skip").onclick = () => {
   const undo = L.update.newer && L.skip_version === L.update.newer;
   invoke("skip_update", { undo }).catch((e) => settingsMsg(e, true));
 };
+$("mac-install").hidden = !mac;
+$("install-copy").onclick = () =>
+  invoke("copy_install_cmd")
+    .then(() => settingsMsg("복사됨. 터미널에 붙여넣고 Enter"))
+    .catch((e) => settingsMsg(e, true));
 $("up-check").onclick = () => invoke("check_update").catch((e) => settingsMsg(e, true));
 $("up-auto").onchange = (e) =>
   invoke("set_update_check", { on: e.target.checked }).catch((err) => settingsMsg(err, true));

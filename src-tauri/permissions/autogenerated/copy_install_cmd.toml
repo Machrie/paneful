@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-copy-install-cmd"
+description = "Enables the copy_install_cmd command without any pre-configured scope."
+commands.allow = ["copy_install_cmd"]
+
+[[permission]]
+identifier = "deny-copy-install-cmd"
+description = "Denies the copy_install_cmd command without any pre-configured scope."
+commands.deny = ["copy_install_cmd"]

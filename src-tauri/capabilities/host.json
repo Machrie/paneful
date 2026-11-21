@@ -32,6 +32,7 @@
     "allow-set-update-check",
     "allow-skip-update",
     "allow-open-update",
+    "allow-copy-install-cmd",
     "allow-check-rules",
     "allow-set-rules-update",
     "allow-set-unread-badge",

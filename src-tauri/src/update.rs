@@ -18,6 +18,11 @@ use crate::AppState;
 /// `/releases/latest` already leaves out drafts and pre-releases.
 const LATEST: &str = "https://api.github.com/repos/Machrie/paneful/releases/latest";
 pub const RELEASES: &str = "https://github.com/Machrie/paneful/releases/latest";
+/// macOS: one terminal line that downloads the latest dmg with curl (no
+/// quarantine flag, so no Gatekeeper warning) and replaces the app. Same
+/// line as the README. Settings shows it with a copy button.
+pub const INSTALL_MAC: &str =
+    "curl -fsSL https://raw.githubusercontent.com/Machrie/paneful/main/scripts/install-macos.sh | bash";
 /// First check a little after start, so it never competes with the panels
 /// loading; then every few hours for windows that stay open for days.
 /// Unauthenticated API limit is 60 requests per hour per IP.
@@ -244,6 +249,12 @@ mod tests {
         s.update_check = false;
         assert_eq!(notice(&s, &st), None);
         assert_eq!(notice(&crate::settings::Settings::default(), &Status::default()), None);
+    }
+
+    #[test]
+    fn install_line_matches_docs() {
+        assert!(include_str!("../../README.md").contains(INSTALL_MAC));
+        assert!(include_str!("../../ui/index.html").contains(INSTALL_MAC));
     }
 
     #[test]

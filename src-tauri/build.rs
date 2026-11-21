@@ -40,6 +40,7 @@ fn main() {
             "set_update_check",
             "skip_update",
             "open_update",
+            "copy_install_cmd",
             "panel_rules",
             "check_rules",
             "set_rules_update",
