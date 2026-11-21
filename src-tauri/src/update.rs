@@ -289,6 +289,9 @@ fn install<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .arg(SCRIPT)
         .arg("paneful-update")
         .env("PANEFUL_WAIT_PID", std::process::id().to_string())
+        // A test run (PANEFUL_PRETEND_VERSION) must not leak into the
+        // relaunched app, or it offers the same update again.
+        .env_remove(PRETEND_ENV)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

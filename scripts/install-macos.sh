@@ -19,11 +19,18 @@ REPO="Machrie/paneful"
 APP="/Applications/Paneful.app"
 
 say() { printf '%s\n' "$*"; }
+# Start the installed app clean: the test switches (PANEFUL_PRETEND_VERSION
+# makes the app think it is old and offer the update again) and the
+# app-mode variables must not reach the new instance.
+relaunch() {
+  env -u PANEFUL_PRETEND_VERSION -u PANEFUL_FORCE -u PANEFUL_WAIT_PID -u PANEFUL_LOG open "$APP"
+}
+
 quit_done=0
 die() {
   printf '실패: %s\n' "$*" >&2
   # The app was closed for the update: bring back whatever is installed.
-  if [ "$quit_done" = 1 ] && [ -d "$APP" ]; then open "$APP" || true; fi
+  if [ "$quit_done" = 1 ] && [ -d "$APP" ]; then relaunch || true; fi
   exit 1
 }
 
@@ -127,4 +134,4 @@ if xattr -r "$APP" 2>/dev/null | grep -q com.apple.quarantine; then
 fi
 
 say "v$ver 설치 완료, 실행합니다"
-open "$APP"
+relaunch
