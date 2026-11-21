@@ -17,6 +17,7 @@ mod rules;
 mod portable;
 mod settings;
 mod tray;
+mod notify;
 mod unread;
 mod update;
 mod zoom;
@@ -159,6 +160,8 @@ struct LayoutPayload {
     rules_update: bool,
     /// Unread badges on the tray / taskbar / Dock icons.
     unread_badge: bool,
+    /// System notifications for new 알림 / 쪽지.
+    notify: bool,
     /// Modifier + wheel zooms a panel (settings checkbox).
     wheel_zoom: bool,
     /// Rules in effect and the last check, for the settings screen.
@@ -336,6 +339,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
         skip_version: s.skip_version.clone(),
         rules_update: s.rules_update,
         unread_badge: s.unread_badge,
+        notify: s.notify,
         wheel_zoom: s.wheel_zoom,
         rules: rules_st,
     };
@@ -776,20 +780,64 @@ fn refocus_active<R: Runtime>(app: &AppHandle<R>) {
 
 /// The calling panel's unread counts changed (panel.js reads them off the
 /// page; see unread.rs). The caller is the panel by its webview label.
+/// `fresh`: the page loaded only moments ago, so a count is not news (no
+/// system notification for it).
 #[tauri::command]
-async fn panel_unread(app: AppHandle, state: State<'_, AppState>, webview: Webview, n: String, dm: String) -> Result<(), String> {
+async fn panel_unread(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    webview: Webview,
+    n: String,
+    dm: String,
+    fresh: Option<bool>,
+) -> Result<(), String> {
     let id = panel_id(&state, webview.label()).ok_or("not a panel")?;
     let u = unread::Unread::new(&n, &dm);
-    let changed = {
+    let old = {
         let mut m = state.unread.lock().unwrap();
         let old = if u.is_empty() { m.remove(&id) } else { m.insert(id, u.clone()) };
-        old.unwrap_or_default() != u
+        old.unwrap_or_default()
     };
-    if changed {
+    if old != u {
         relayout(&app);
         tray::refresh(&app);
+        if !fresh.unwrap_or(false) {
+            notify_unread(&app, &state, id, &old, &u);
+        }
     }
     Ok(())
+}
+
+/// System notification for a count that went up (notify.rs), unless they
+/// are off, the window is in front (the tabs show it) or one just went out
+/// for this account.
+fn notify_unread(app: &AppHandle, state: &AppState, id: Uuid, old: &unread::Unread, now: &unread::Unread) {
+    let (n, dm) = notify::rose(old, now);
+    if !(n || dm) {
+        return;
+    }
+    let label = {
+        let s = state.settings.lock().unwrap();
+        if !s.notify {
+            return;
+        }
+        s.accounts.iter().find(|a| a.id == id).map(|a| a.label.clone()).unwrap_or_default()
+    };
+    let hidden = *state.hidden.lock().unwrap();
+    let in_front = !hidden
+        && app
+            .get_window(MAIN)
+            .map(|w| w.is_focused().unwrap_or(false) && !w.is_minimized().unwrap_or(false))
+            .unwrap_or(false);
+    if in_front {
+        return;
+    }
+    if !app.state::<notify::State>().allow(id, std::time::Instant::now()) {
+        log::info!("notification for {} skipped: one went out less than {}s ago", label, notify::GAP.as_secs());
+        return;
+    }
+    let (title, body) = notify::message(&label, n, dm, now);
+    notify::show(app, id, &title, &body);
 }
 
 /// The calling panel's page scale changed by itself or by the app (panel.js
@@ -1710,6 +1758,24 @@ async fn set_unread_badge(app: AppHandle, state: State<'_, AppState>, on: bool) 
     Ok(())
 }
 
+/// Settings checkbox: system notifications for new 알림 / 쪽지.
+#[tauri::command]
+async fn set_notify(app: AppHandle, state: State<'_, AppState>, on: bool) -> Result<(), String> {
+    let snapshot = {
+        let mut s = state.settings.lock().unwrap();
+        s.notify = on;
+        s.clone()
+    };
+    state.save(&snapshot);
+    log::info!("notifications {on}");
+    #[cfg(windows)]
+    if on {
+        notify::register_app_id(&app.config().identifier, "Paneful");
+    }
+    relayout(&app);
+    Ok(())
+}
+
 /// Tell a panel whether modifier + wheel zooms (panel.js `paneful-wheel`).
 fn wheel_js(on: bool) -> String {
     format!("window.dispatchEvent(new CustomEvent('paneful-wheel',{{detail:{on}}}))")
@@ -1854,6 +1920,11 @@ pub fn run() {
             };
             state.save(&s);
             app.manage(state);
+            app.manage(notify::State::default());
+            #[cfg(windows)]
+            if s.notify {
+                notify::register_app_id(&app.config().identifier, "Paneful");
+            }
 
             let window = WindowBuilder::new(app, MAIN)
                 .title("Paneful")
@@ -1963,6 +2034,7 @@ pub fn run() {
             check_rules,
             set_rules_update,
             set_unread_badge,
+            set_notify,
             set_wheel_zoom
         ])
         .run(tauri::generate_context!())

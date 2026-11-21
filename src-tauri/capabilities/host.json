@@ -36,6 +36,7 @@
     "allow-check-rules",
     "allow-set-rules-update",
     "allow-set-unread-badge",
+    "allow-set-notify",
     "allow-set-wheel-zoom"
   ]
 }

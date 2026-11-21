@@ -179,6 +179,10 @@ $("rules-auto").onchange = (e) =>
 $("wheel-zoom").onchange = (e) =>
   invoke("set_wheel_zoom", { on: e.target.checked }).catch((err) => settingsMsg(err, true));
 
+// ---- System notifications for new 알림 / 쪽지 (settings section)
+$("notify-auto").onchange = (e) =>
+  invoke("set_notify", { on: e.target.checked }).catch((err) => settingsMsg(err, true));
+
 // ---- Unread badges on the tray / taskbar / Dock icons (settings section)
 $("badge-auto").onchange = (e) =>
   invoke("set_unread_badge", { on: e.target.checked }).catch((err) => settingsMsg(err, true));
@@ -239,6 +243,7 @@ function render() {
   renderUpdate();
   renderRules();
   $("badge-auto").checked = L.unread_badge !== false;
+  $("notify-auto").checked = L.notify !== false;
   if ($("wheel-zoom").checked !== !!L.wheel_zoom) {
     $("wheel-zoom").checked = !!L.wheel_zoom;
     buildKeys();
