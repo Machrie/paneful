@@ -83,8 +83,15 @@ if running; then
 fi
 
 [ -w /Applications ] || die "/Applications에 쓸 권한이 없음 (관리자 계정으로 실행)"
+# Copy next to the old app first; the old one goes only once the new copy
+# is complete, so a failed copy leaves the installed app as it was.
+new="/Applications/.Paneful.app.new"
+rm -rf "$new"
+ditto "$mnt/Paneful.app" "$new" || { rm -rf "$new"; die "응용 프로그램 폴더에 복사 실패 (기존 앱은 그대로)"; }
+[ -f "$new/Contents/Info.plist" ] && [ -n "$(ls "$new/Contents/MacOS" 2>/dev/null)" ] \
+  || { rm -rf "$new"; die "복사한 앱이 이상함 (기존 앱은 그대로)"; }
 rm -rf "$APP"
-ditto "$mnt/Paneful.app" "$APP" || die "응용 프로그램 폴더에 복사 실패"
+mv "$new" "$APP" || die "교체 실패: $new 를 $APP 로 옮겨라"
 # Belt and braces: no quarantine flag on the installed app, whatever
 # happened above. Without it Gatekeeper doesn't stop the app.
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
