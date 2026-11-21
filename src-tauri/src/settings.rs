@@ -94,6 +94,10 @@ pub struct Settings {
     /// window title's "(3)" goes with it. Off: counts only in the tooltip.
     #[serde(default = "yes")]
     pub unread_badge: bool,
+    /// System notification (Notification Center / toast) when a panel's
+    /// 알림 or 쪽지 count goes up (notify.rs).
+    #[serde(default = "yes")]
+    pub notify: bool,
     /// Ctrl + wheel (Windows) / Cmd + wheel (macOS) zooms a panel. Off by
     /// default on macOS: with Cmd held for another shortcut, a brush of the
     /// trackpad is a wheel and ran the zoom up and down. The keys stay.
@@ -145,6 +149,7 @@ impl Default for Settings {
             skip_version: None,
             rules_update: true,
             unread_badge: true,
+            notify: true,
             wheel_zoom: wheel_zoom_default(),
         }
     }
@@ -216,6 +221,7 @@ impl Settings {
             skip_version: field(&v, "skip_version"),
             rules_update: v.get("rules_update").and_then(|x| x.as_bool()).unwrap_or(true),
             unread_badge: v.get("unread_badge").and_then(|x| x.as_bool()).unwrap_or(true),
+            notify: v.get("notify").and_then(|x| x.as_bool()).unwrap_or(true),
             wheel_zoom: v.get("wheel_zoom").and_then(|x| x.as_bool()).unwrap_or_else(wheel_zoom_default),
         })
     }
@@ -382,6 +388,7 @@ mod tests {
         assert!(l.update_check && l.skip_version.is_none());
         assert!(l.rules_update);
         assert!(l.unread_badge);
+        assert!(l.notify);
         assert_eq!(l.wheel_zoom, wheel_zoom_default());
     }
 

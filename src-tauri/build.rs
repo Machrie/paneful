@@ -45,6 +45,7 @@ fn main() {
             "check_rules",
             "set_rules_update",
             "set_unread_badge",
+            "set_notify",
             "set_wheel_zoom",
         ]),
     ))

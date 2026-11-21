@@ -507,12 +507,16 @@
     return { n, dm: badgeIn(ml) };
   };
   let sent = "";
+  const FRESH_MS = 20000;
   const checkUnread = () => {
     const u = readUnread();
     const key = u.n + "|" + u.dm;
     if (key === sent) return;
     sent = key;
-    call("panel_unread", u).catch(() => (sent = "")); // retried on the next tick
+    // Counts in the first seconds after a load were there before (Rust
+    // sends no system notification for them).
+    const fresh = performance.now() < FRESH_MS;
+    call("panel_unread", { ...u, fresh }).catch(() => (sent = "")); // retried on the next tick
   };
   // Cheap (two selectors) and only sends on change.
   // Driven by DOM changes, not only a timer: in a hidden page (window in

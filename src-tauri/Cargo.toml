@@ -40,11 +40,18 @@ tauri-plugin-global-shortcut = "2"
 # Folder picker for the save folder in settings (used from Rust only).
 tauri-plugin-dialog = "2"
 
+# New 알림 / 쪽지 as a system notification (notify.rs): toast on Windows,
+# NSUserNotificationCenter on macOS. Used directly instead of
+# tauri-plugin-notification, which injects a window.Notification
+# replacement into every webview, x.com panels included.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+notify-rust = { version = "4", default-features = false }
+
 [target.'cfg(windows)'.dependencies]
 # Same versions tauri-runtime-wry 2.12.5 uses: the M0 profile check and the
 # post capture screenshot (CapturePreview into a memory stream, snap.rs).
 webview2-com = "0.39"
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_System_Registry"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Post capture screenshot (WKWebView takeSnapshot, snap.rs). Same versions
