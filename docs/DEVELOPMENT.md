@@ -29,7 +29,7 @@ npx @tauri-apps/cli@2 build           # 설치 파일 (Windows: NSIS .exe, macOS
 - 알림 숫자는 `src-tauri/src/unread.rs`(값 검사, 합계, 트레이 아이콘 빨간 점). 패널 스크립트가 X 화면의 배지를 읽어 `panel_unread`로 보낸다. 저장하지 않는다
 - 트레이·전역 단축키는 `src-tauri/src/tray.rs` (`tray-icon` 피처, `tauri-plugin-global-shortcut`)
 - 패널 주입 스크립트
-  - `src-tauri/src/panel.js`: 포커스 보고, 앱 단축키(`Ctrl+휠` 배율 포함), 입력창 밖 `Ctrl+V` 링크 열기, 알림·쪽지 배지 읽기만. `panel` capability로 `panel_focused`, `panel_unread`(숫자만, Rust가 형식 검사), `shortcut`, `panel_keys`·`panel_xkeys`(단축키 바인딩 읽기), `paste_link`(클립보드는 Rust가 읽고 링크 검사·정리는 `nav.rs`의 `x_link`, 이동은 안 함), `open_link`(사용자가 확인한 주소를 `x_link`로 다시 검사하고 이동), `send_link`(다른 패널에서 열기: 주소를 `x_link`로 검사하고 고른 패널을 이동)만 허용. 창을 트레이로 숨길 때 영상 정지도 여기서 한다
+  - `src-tauri/src/panel.js`: 포커스 보고, 앱 단축키(`Ctrl+휠` 배율 포함), 복사한 링크 열기(`paste` 단축키, 기본 `Ctrl+O`. `Ctrl+V`로 두면 입력창 밖에서만), 알림·쪽지 배지 읽기만. `panel` capability로 `panel_focused`, `panel_unread`(숫자만, Rust가 형식 검사), `shortcut`, `panel_keys`·`panel_xkeys`(단축키 바인딩 읽기), `paste_link`(클립보드는 Rust가 읽고 링크 검사·정리는 `nav.rs`의 `x_link`, 이동은 안 함), `open_link`(사용자가 확인한 주소를 `x_link`로 다시 검사하고 이동), `send_link`(다른 패널에서 열기: 주소를 `x_link`로 검사하고 고른 패널을 이동)만 허용. 창을 트레이로 숨길 때 영상 정지도 여기서 한다
   - `src-tauri/src/links.js`: x.com 계열 밖 링크의 왼쪽 클릭을 x.com보다 먼저 받아 실제 주소로 `window.open`. `on_new_window`가 기본 브라우저로 보낸다(우클릭 > 새 창과 같은 경로)
   - `src-tauri/src/rules.js` + `rules.rs` + `rules/x.v1.json`: X 화면 규칙(선택자). Rust가 받고 검증·캐시하고, `rules.js`가 `panel.js`·`media.js`·`capture.js`에 넘긴다. 패널은 `panel_rules`로 읽기만 한다
   - `src-tauri/src/media.js` + `media.rs`: 원본 저장 버튼. 패널엔 IPC 없이 `window.open` 트리거를 `on_new_window`가 가로채고, Rust가 twimg 주소를 검증한 뒤 쿠키 없이 받는다

@@ -1053,14 +1053,15 @@ fn run_shortcut(
         }
         return Ok(());
     }
-    if action == "send" {
-        // From the host UI: the active panel works out what to send.
+    if action == "send" || action == "paste" {
+        // From the host UI: the active panel does the work (works out what
+        // to send / asks before opening the copied link).
         let active = *state.active.lock().unwrap();
         let ids: Vec<Uuid> = state.settings.lock().unwrap().accounts.iter().map(|a| a.id).collect();
         if let Some(id) = active.filter(|a| ids.contains(a)).or(ids.first().copied()) {
             focus_account(&app, id);
             if let Some(wv) = app.get_webview(&format!("panel-{}", id.simple())) {
-                let _ = wv.eval("window.dispatchEvent(new Event('paneful-send'))");
+                let _ = wv.eval(format!("window.dispatchEvent(new Event('paneful-{action}'))"));
             }
         }
         return Ok(());
@@ -1144,7 +1145,7 @@ fn run_shortcut(
     Ok(())
 }
 
-/// What panel.js does after Ctrl/Cmd+V: ask before opening `url`, or show
+/// What panel.js does after the "paste" shortcut: ask before opening `url`, or show
 /// `msg` briefly. Both None: nothing to do.
 #[derive(Serialize, Default)]
 struct Pasted {
@@ -1157,7 +1158,7 @@ fn is_panel(state: &AppState, webview: &Webview) -> bool {
     s.accounts.iter().any(|a| panel_label(a) == webview.label())
 }
 
-/// Ctrl/Cmd+V in a panel outside any text field (panel.js): if the
+/// The "paste" shortcut in a panel (panel.js, Ctrl/Cmd+O by default): if the
 /// clipboard holds one X link, hand back the cleaned-up x.com address so
 /// the panel can ask before going there (open_link). Nothing navigates
 /// here. The caller is the panel by its webview label.
@@ -1168,11 +1169,23 @@ async fn paste_link(app: AppHandle, state: State<'_, AppState>, webview: Webview
         return Err("not a panel".into());
     }
     // Image or empty clipboard: read_text fails, nothing to do.
-    let Ok(text) = tauri_plugin_clipboard_manager::ClipboardExt::clipboard(&app).read_text() else {
-        return Ok(Pasted::default());
+    let text = match tauri_plugin_clipboard_manager::ClipboardExt::clipboard(&app).read_text() {
+        Ok(t) => t,
+        Err(e) => {
+            log::info!("paste_link in {}: no text ({e})", webview.label());
+            return Ok(Pasted::default());
+        }
     };
     let msg = |m: &str| Ok(Pasted { url: None, msg: Some(m.into()) });
-    match nav::x_link(&text) {
+    let r = nav::x_link(&text);
+    // Kind only: the clipboard text itself stays out of the log.
+    log::info!("paste_link in {}: {}", webview.label(), match &r {
+        Ok(_) => "x link",
+        Err(nav::LinkError::NotLink) => "not a link",
+        Err(nav::LinkError::OtherSite) => "other site",
+        Err(nav::LinkError::ShortLink) => "t.co",
+    });
+    match r {
         Ok(url) => Ok(Pasted { url: Some(url.to_string()), msg: None }),
         Err(nav::LinkError::NotLink) => Ok(Pasted::default()),
         Err(nav::LinkError::OtherSite) => msg("X 링크가 아님 · x.com·twitter.com 링크만 열 수 있음"),
