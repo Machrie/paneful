@@ -3,9 +3,9 @@
 // 1. tell the app when this panel gets keyboard focus (active-panel marker)
 // 2. catch the app's own shortcuts before x.com sees them (and Ctrl/Cmd +
 //    wheel for zoom)
-// 3. Ctrl/Cmd+V outside a text field: ask Rust for the X link on the
-//    clipboard (Rust reads the clipboard, not the page), ask the user, then
-//    open it in this panel
+// 3. "복사한 X 링크 열기" (configurable, Ctrl/Cmd+O by default): ask Rust
+//    for the X link on the clipboard (Rust reads the clipboard, not the
+//    page), ask the user, then open it in this panel
 // 4. "다른 패널에서 열기": the shortcut, then a click on a post (or Enter
 //    for this page) sends it to another panel; with several others the
 //    panel layout is drawn to pick one
@@ -44,6 +44,10 @@
   const hit = (b, e) =>
     b && e.code === b.code && e.ctrlKey === b.ctrl && e.altKey === b.alt &&
     e.shiftKey === b.shift && e.metaKey === b.meta;
+
+  // The platform's own paste key, Ctrl+V (Windows) / Cmd+V (macOS).
+  const pasteKey = (b) =>
+    !!b && b.code === "KeyV" && !b.shift && !b.alt && (mac ? b.meta && !b.ctrl : b.ctrl && !b.meta);
 
   // e.code, not e.key: stays the same under the Korean IME.
   const shortcutOf = (e) => {
@@ -121,6 +125,13 @@
     (e) => {
       const a = shortcutOf(e);
       if (!a) return;
+      // Set to the platform's paste key (Ctrl/Cmd+V): in a text field it
+      // stays a paste, and it is never swallowed, so X's own paste handling
+      // is unchanged.
+      if (a.action === "paste" && pasteKey(keys.paste)) {
+        if (!e.repeat && !editable(e.target) && !editable(document.activeElement)) pasteLink();
+        return;
+      }
       e.preventDefault();
       e.stopImmediatePropagation();
       // Zoom while picking posts for a capture would change the crop sizes.
@@ -129,14 +140,16 @@
       if (e.repeat && ["bar", "help", "settings", "capture", "zoom", "send", "reload"].includes(a.action)) return;
       // This page knows which post is meant; Rust only opens it.
       if (a.action === "send") startPick();
-      else call("shortcut", { ...a, via: `key ${e.code}` }).catch(() => {});
+      else if (a.action === "paste") {
+        if (!e.repeat) pasteLink();
+      } else call("shortcut", { ...a, via: `key ${e.code}` }).catch(() => {});
     },
     true,
   );
   // ---- paste a link to open it
-  // Only when the key goes to no text field: pasting into a post, the
-  // search box or a DM stays X's. The key itself is left alone (no
-  // preventDefault), so X's own paste handling is unchanged.
+  // Any key but Ctrl/Cmd+V works in text fields too, like the other
+  // shortcuts. Ctrl/Cmd+V (pasteKey) only outside them: pasting into a
+  // post, the search box or a DM stays X's.
   const NOT_TEXT = /^(checkbox|radio|button|submit|reset|range|color|file|image)$/i;
   const editable = (el) => {
     while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
@@ -465,21 +478,17 @@
     },
     true,
   );
-  window.addEventListener(
-    "keydown",
-    (e) => {
-      if (e.code !== "KeyV" || e.repeat || e.shiftKey || e.altKey) return;
-      if (!(mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey)) return;
-      if (editable(e.target) || editable(document.activeElement)) return;
-      // Picking posts for a capture: a page change would drop the picks.
-      if (window[Symbol.for("paneful.capturing")] || picking) return;
-      call("paste_link").then((r) => {
-        if (r && r.url) ask(r.url);
-        else if (r && r.msg) say(r.msg);
-      }, () => {});
-    },
-    true,
-  );
+  // The "paste" shortcut (handled with the others above), or from the host
+  // UI when it had focus (Rust sends paneful-paste).
+  const pasteLink = () => {
+    // Picking posts for a capture: a page change would drop the picks.
+    if (capturing() || picking) return;
+    call("paste_link").then((r) => {
+      if (r && r.url) ask(r.url);
+      else if (r && r.msg) say(r.msg);
+    }, () => {});
+  };
+  window.addEventListener("paneful-paste", pasteLink);
 
   // ---- unread counts
   // Badge = a leaf element on the nav link whose text is just a number

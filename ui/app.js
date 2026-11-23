@@ -450,8 +450,6 @@ function startDrag(e, el, i) {
 }
 
 // ---- shortcut overlay
-// Fixed: Ctrl/Cmd+V in a panel outside text fields (panel.js, paste_link).
-const PASTE_LABEL = "복사한 X 링크 열기 (입력창 밖)";
 // Fixed: Ctrl/Cmd + wheel in a panel (panel.js), same steps as the zoom keys.
 const WHEEL_LABEL = "패널 배율 키우기/줄이기 (휠)";
 const KEY_LABELS = {
@@ -468,6 +466,7 @@ const KEY_LABELS = {
   zoom_out: "패널 배율 줄이기",
   zoom_reset: "패널 배율 100%",
   reload: "패널 새로고침",
+  paste: "복사한 X 링크 열기",
 };
 // X's own shortcuts, only the ones that agree across several public lists
 // (X has no current official page for them). Work in the focused panel.
@@ -512,7 +511,7 @@ function fillKeys(dl, rows) {
 function buildKeys() {
   const dl = $("app-keys");
   dl.replaceChildren();
-  const rows = [[[MOD, "1–9"], "N번째 패널로 포커스"], [[MOD, "V"], PASTE_LABEL]];
+  const rows = [[[MOD, "1–9"], "N번째 패널로 포커스"]];
   if (L.wheel_zoom) rows.push([[MOD, "휠"], WHEEL_LABEL]);
   for (const k of L.keys) if (k.caps.length) rows.push([k.caps, KEY_LABELS[k.id]]);
   fillKeys(dl, rows);
@@ -591,7 +590,6 @@ function buildSettings() {
   // Fixed ones, for reference.
   for (const [label, keys] of [
     ["N번째 패널로 포커스", [MOD, "1–9"]],
-    [PASTE_LABEL, [MOD, "V"]],
     [WHEEL_LABEL, [MOD, "휠"]],
   ]) {
     const row = document.createElement("div");
@@ -889,7 +887,12 @@ const hit = (b, e) =>
 function keyOf(e) {
   if (!L) return null;
   if (L.capture) return null; // capture.js handles keys in the preview
-  for (const k of L.keys) if (hit(k.binding, e)) return { action: k.id };
+  for (const k of L.keys) {
+    if (!hit(k.binding, e)) continue;
+    // Link paste set to Ctrl/Cmd+V: a paste in a text field here (panel name).
+    if (k.id === "paste" && e.code === "KeyV" && e.target instanceof HTMLInputElement && e.target.type === "text") return null;
+    return { action: k.id };
+  }
   const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
   if (mod && !e.shiftKey && !e.altKey && /^Digit[1-9]$/.test(e.code)) {
     return { action: "focus", index: Number(e.code.slice(5)) - 1 };

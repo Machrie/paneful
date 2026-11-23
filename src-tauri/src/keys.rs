@@ -14,7 +14,7 @@ use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 pub const GLOBAL: &str = "global";
 
 /// In-app shortcuts: (id, default). Panel focus (Ctrl/Cmd+1..9) is fixed.
-pub const APP: [(&str, &str); 12] = [
+pub const APP: [(&str, &str); 13] = [
     ("next", "Control+Tab"),
     ("prev", "Control+Shift+Tab"),
     ("bar", "CommandOrControl+Shift+H"),
@@ -33,6 +33,10 @@ pub const APP: [(&str, &str); 12] = [
     // Reload the panel the key is pressed in (or the active one). X's own
     // `r` (reply) is a bare key, so Ctrl/Cmd+R doesn't take it away.
     ("reload", "CommandOrControl+R"),
+    // Open the X link on the clipboard in the panel the key is pressed in
+    // (or the active one), after asking. Handled in panel.js. Set to
+    // Ctrl/Cmd+V it only works outside text fields (there it stays a paste).
+    ("paste", "CommandOrControl+O"),
 ];
 
 pub fn default_of(id: &str) -> Option<&'static str> {
@@ -212,6 +216,7 @@ pub fn label(id: &str) -> &'static str {
         "zoom_out" => "패널 배율 줄이기",
         "zoom_reset" => "패널 배율 100%",
         "reload" => "패널 새로고침",
+        "paste" => "복사한 X 링크 열기",
         _ => "?",
     }
 }
@@ -334,10 +339,6 @@ pub fn validate_x(
     }
     if sc.key == Code::KeyG && sc.mods.is_empty() {
         return Err("g는 X 연속키(g → h 등)의 첫 키라 못 씀".into());
-    }
-    let main = if cfg!(target_os = "macos") { Modifiers::SUPER } else { Modifiers::CONTROL };
-    if sc.key == Code::KeyV && sc.mods == main {
-        return Err(format!("{}는 복사한 링크 열기(고정)에 쓰는 키임", shown()));
     }
     if is_panel_focus(&sc) {
         return Err(format!("{}는 패널 전환(고정)에 쓰는 키임", shown()));
@@ -519,6 +520,11 @@ mod tests {
         // Global vs app collision both ways.
         assert!(validate(&map, "bar", crate::settings::DEFAULT_HOTKEY).is_err());
         assert!(validate(&map, GLOBAL, "Control+Tab").is_err());
+        // The link paste key can go back to Ctrl/Cmd+V, and Ctrl/Cmd+O is
+        // taken by it by default.
+        assert!(validate(&map, "paste", "CommandOrControl+V").is_ok());
+        let e = validate(&map, "bar", "CommandOrControl+O").unwrap_err();
+        assert!(e.contains("링크"), "{e}");
     }
 
     #[test]
@@ -567,7 +573,7 @@ mod tests {
         // App keys and fixed keys.
         assert!(validate_x(&app, &x, "x_like", "CommandOrControl+Slash").is_err());
         assert!(validate_x(&app, &x, "x_like", "CommandOrControl+3").is_err());
-        assert!(validate_x(&app, &x, "x_like", "CommandOrControl+V").is_err());
+        assert!(validate_x(&app, &x, "x_like", "CommandOrControl+O").is_err());
         assert!(validate_x(&app, &x, "x_like", "G").is_err());
         assert!(validate_x(&app, &x, "x_like", "Shift+G").is_ok());
         assert!(validate_x(&app, &x, "x_like", "Escape").is_err());
