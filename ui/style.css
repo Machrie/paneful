@@ -110,6 +110,18 @@ kbd { display: inline-block; min-width: 22px; padding: 3px 6px; border-radius: 6
 /* ---- settings screen (same overlay as the shortcut sheet) */
 .sheet.narrow { width: min(640px, 100%); }
 .sheet section { margin-bottom: 18px; }
+/* Tabs: fixed height so switching tabs doesn't make the sheet jump; only
+   the pane scrolls, the head, tab row and status line stay put. */
+.sheet.settings { height: min(720px, 100%); display: flex; flex-direction: column; overflow: hidden;
+  padding-bottom: 12px; }
+#set-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 0 -24px 14px; padding: 0 16px; }
+#set-tabs button { position: relative; height: 38px; padding: 0 14px; border: 0; background: none;
+  color: var(--muted); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; border-radius: 8px 8px 0 0; }
+#set-tabs button:hover { color: var(--fg); background: var(--hover); }
+#set-tabs button[aria-selected="true"] { color: var(--fg); }
+#set-tabs button[aria-selected="true"]::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px;
+  height: 3px; border-radius: 2px; background: var(--accent); }
+.panes { flex: 1; min-height: 0; overflow: auto; margin: 0 -24px; padding: 0 24px; }
 .hint { margin: -4px 0 10px; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .dirrow { display: flex; align-items: center; gap: 6px; }
 #save-dir, #install-cmd { flex: 1; min-width: 0; padding: 6px 10px; border-radius: 8px; background: var(--surface);
@@ -142,6 +154,7 @@ button.kcaps:hover { border-color: var(--line); background: var(--hover); }
 #up-state { flex: 1; min-width: 0; color: var(--muted); font-size: 13px; }
 #up-state.ok { color: var(--ok); }
 .sheet .check { width: fit-content; }
+.check + .hint { margin-top: 10px; }
 /* ---- capture preview (panels are hidden while it is open) */
 #cap { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--bg); }
 .cap-head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line);
