@@ -381,6 +381,14 @@ fn add_panel<R: Runtime>(window: &Window<R>, acc: &Account, rect: layout::Rect, 
         .initialization_script(media::SCRIPT)
         .initialization_script(capture::SCRIPT)
         .initialization_script(LINKS_JS)
+        // File drops from Explorer / Finder go to the page, so X's composer
+        // takes them as attachments. With Tauri's handler on, wry swallows
+        // them: on Windows it turns off WebView2's external drop and puts
+        // its own IDropTarget on the panel, on macOS Tauri's callback
+        // returns true, which tells WKWebView the drop is handled. Nothing
+        // here listens for Tauri's DragDrop events. A drop where X doesn't
+        // take it is stopped in links.js.
+        .disable_drag_drop_handler()
         // Zoom again after each page load: WebView2 may drop the zoom factor
         // when a page loads (Chromium keeps zoom per site). Same value again
         // is a no-op.
