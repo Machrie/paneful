@@ -6,6 +6,8 @@
 //!   `ICoreWebView2_20::FrameId`) counts for that panel; the browser, GPU,
 //!   utility processes and renderers with no / mixed frames count as
 //!   "shared". Size = private working set (the Task Manager "Memory" column).
+//!   Runtimes older than FIXED_RUNTIME crash reading frames, so there the
+//!   frames are skipped and everything counts as shared.
 //! - macOS: each panel's WebContent process id (`_webProcessIdentifier`,
 //!   private WKWebView API, checked with respondsToSelector first) and its
 //!   physical footprint (Activity Monitor "Memory"). WebKit's GPU and
@@ -105,12 +107,12 @@ pub async fn measure<R: Runtime>(app: &AppHandle<R>) -> Report {
     let r = collect(app, &labels, trace).await;
     if trace {
         match &r {
-            Ok((p, _)) => log::info!("memory #{n}: done, {} processes", p.len()),
+            Ok((p, _, _)) => log::info!("memory #{n}: done, {} processes", p.len()),
             Err((_, e)) => log::info!("memory #{n}: failed: {e}"),
         }
     }
     let (procs, method, error) = match r {
-        Ok((p, m)) => (p, m, None),
+        Ok((p, m, note)) => (p, m, note),
         Err((m, e)) => (vec![], m, Some(e)),
     };
     let sums = sum(&procs);
@@ -155,7 +157,8 @@ macro_rules! step {
     };
 }
 
-type Collected = Result<(Vec<(u32, Owner, Option<u64>)>, String), (String, String)>;
+/// Ok: processes, method, and a note on what could not be measured.
+type Collected = Result<(Vec<(u32, Owner, Option<u64>)>, String, Option<String>), (String, String)>;
 
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -239,18 +242,30 @@ async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String], trace: bool)
     //    webview (same WebView2 browser process as the panels).
     let host = app.get_webview(crate::HOST).ok_or((m(), "앱 화면 없음".to_string()))?;
     // (pid, kind, main frame ids)
-    let (tx, rx) = mpsc::channel::<Result<Vec<(u32, i32, Vec<u32>)>, String>>();
+    // Ok: processes, and the runtime version when frames were skipped.
+    #[allow(clippy::type_complexity)]
+    let (tx, rx) = mpsc::channel::<Result<(Vec<(u32, i32, Vec<u32>)>, Option<String>), String>>();
     host.with_webview(move |pw| unsafe {
         step!(trace, "asking for processes");
         let start = (|| -> windows::core::Result<()> {
             let core = pw.controller().CoreWebView2()?;
             let env = core.cast::<ICoreWebView2_2>()?.Environment()?;
+            let mut ver = windows::core::PWSTR::null();
+            let version = match env.BrowserVersionString(&mut ver) {
+                Ok(()) => webview2_com::take_pwstr(ver),
+                Err(_) => String::new(),
+            };
+            let frames_ok = frames_safe(&version);
+            step!(trace, "runtime {version}, frames {}", if frames_ok { "read" } else { "skipped" });
             let env13 = env.cast::<ICoreWebView2Environment13>()?;
             let tx2 = tx.clone();
             let handler = GetProcessExtendedInfosCompletedHandler::create(Box::new(move |r, list| {
                 step!(trace, "process list came: {r:?}, {}", if list.is_some() { "with list" } else { "no list" });
-                let out = r.and_then(|_| read_infos(list, trace)).map_err(|e| e.to_string());
-                step!(trace, "process list read: {}", match &out { Ok(v) => format!("{} processes", v.len()), Err(e) => e.clone() });
+                let out = r
+                    .and_then(|_| read_infos(list, trace, frames_ok))
+                    .map(|v| (v, (!frames_ok).then(|| version.clone())))
+                    .map_err(|e| e.to_string());
+                step!(trace, "process list read: {}", match &out { Ok(v) => format!("{} processes", v.0.len()), Err(e) => e.clone() });
                 let _ = tx2.send(out);
                 Ok(())
             }));
@@ -263,7 +278,10 @@ async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String], trace: bool)
         }
     })
     .map_err(|e| (m(), e.to_string()))?;
-    let infos = recv(rx).await.and_then(|r| r).map_err(|e| (m(), e))?;
+    let (infos, skipped) = recv(rx).await.and_then(|r| r).map_err(|e| (m(), e))?;
+    let note = skipped.map(|v| {
+        format!("이 WebView2 런타임({v})은 패널별 구분을 하면 앱이 꺼지는 버그가 있어서 전체만 잼. 런타임이 {FIXED_RUNTIME} 이상으로 업데이트되면 패널별로 나옴")
+    });
 
     step!(trace, "reading sizes");
     // 3. sizes, off the main thread.
@@ -291,7 +309,31 @@ async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String], trace: bool)
     })
     .await
     .map_err(|e| (m(), e.to_string()))?;
-    Ok((out, m()))
+    Ok((out, m(), note))
+}
+
+/// First WebView2 runtime where reading a process's frames
+/// (`ICoreWebView2FrameInfoCollectionIterator::GetCurrent` inside the
+/// `GetProcessExtendedInfos` callback) doesn't access-violate. On 156.x it
+/// takes the whole app down: MicrosoftEdge/WebView2Feedback#5793, fixed in
+/// this build.
+#[cfg_attr(not(windows), allow(dead_code))]
+const FIXED_RUNTIME: &str = "159.0.4399.0";
+
+/// Runtime version string ("156.0.4314.58", maybe with a channel suffix such
+/// as " canary") at or past FIXED_RUNTIME. Unreadable: not safe.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn frames_safe(version: &str) -> bool {
+    fn parts(v: &str) -> Option<[u32; 4]> {
+        let v = v.split_whitespace().next()?;
+        let mut it = v.split('.').map(|p| p.parse::<u32>().ok());
+        let out = [it.next()??, it.next()??, it.next()??, it.next()??];
+        it.next().is_none().then_some(out)
+    }
+    match (parts(version), parts(FIXED_RUNTIME)) {
+        (Some(v), Some(f)) => v >= f,
+        _ => false,
+    }
 }
 
 /// Main thread, inside the completion handler: pid, kind and the main frame
@@ -300,6 +342,7 @@ async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String], trace: bool)
 unsafe fn read_infos(
     list: Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2ProcessExtendedInfoCollection>,
     trace: bool,
+    frames: bool,
 ) -> windows::core::Result<Vec<(u32, i32, Vec<u32>)>> {
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     let Some(list) = list else { return Ok(vec![]) };
@@ -315,6 +358,13 @@ unsafe fn read_infos(
         let _ = info.Kind(&mut kind);
         step!(trace, "process {i}/{n}: pid {pid} kind {}", kind.0);
         let mut mains = vec![];
+        // No frames read: every renderer counts as shared (see FIXED_RUNTIME).
+        if !frames {
+            if pid > 0 {
+                out.push((pid as u32, kind.0, mains));
+            }
+            continue;
+        }
         if let Ok(it) = ext.AssociatedFrameInfos().and_then(|c| c.GetIterator()) {
             let mut has = windows::core::BOOL::default();
             let _ = it.HasCurrent(&mut has);
@@ -438,7 +488,7 @@ async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String], trace: bool)
         .into_iter()
         .map(|(pid, owners)| (pid, owner_of(&owners), footprint(pid)))
         .collect();
-    Ok((out, m()))
+    Ok((out, m(), None))
 }
 
 #[cfg(target_os = "macos")]
@@ -473,6 +523,18 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn runtime_gate() {
+        assert!(!frames_safe("156.0.4314.58"));
+        assert!(!frames_safe("159.0.4398.9"));
+        assert!(frames_safe("159.0.4399.0"));
+        assert!(frames_safe("159.0.4399.0 canary"));
+        assert!(frames_safe("160.0.1.2"));
+        assert!(!frames_safe(""));
+        assert!(!frames_safe("abc"));
+        assert!(!frames_safe("159.0.4399"));
     }
 
     #[test]
