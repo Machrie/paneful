@@ -33,4 +33,20 @@
     },
     true,
   );
+
+  // File drag from Explorer / Finder (see disable_drag_drop_handler in
+  // lib.rs). X's composer takes the drop itself and cancels the events.
+  // Anywhere else the webview would open the file as a page; on_navigation
+  // blocks file:// already, but the cursor should also say "no drop" there.
+  // Bubble phase on window, so this only runs after X had its turn.
+  const files = (e) => !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
+  window.addEventListener("dragover", (e) => {
+    if (!files(e) || e.defaultPrevented) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "none";
+  });
+  window.addEventListener("drop", (e) => {
+    if (!files(e) || e.defaultPrevented) return;
+    e.preventDefault();
+  });
 })();
