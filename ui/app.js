@@ -950,7 +950,7 @@ window.addEventListener(
   true,
 );
 
-// ---- panel memory (settings screen). Measured only after 재기 is pressed,
+// ---- panel memory (settings screen). Measured only after 메모리 측정 is pressed,
 // then again every MEM_EVERY while settings stays open on the 고급 tab. Not on open: the
 // WebView2 process query is the newest native code on this screen, so
 // opening settings must not depend on it.
