@@ -46,90 +46,109 @@
     </div>
   </div>
   <div id="settings" class="overlay" hidden>
-    <div class="sheet narrow" role="dialog" aria-label="설정">
+    <div class="sheet narrow settings" role="dialog" aria-label="설정">
       <div class="sheet-head">
         <h1>설정</h1>
         <button id="settings-close" class="icon" data-icon="close" title="닫기 (Esc)"></button>
       </div>
-      <section>
-        <h2>패널</h2>
-        <p class="hint">이름은 칸에서 고치고 Enter. 화살표로 순서 바꾸기 (<span class="modkey">Ctrl</span>+1~9는 화면 순서를 따라감).</p>
-        <div id="panel-rows"></div>
-      </section>
-      <section>
-        <h2>저장 폴더</h2>
-        <p class="hint">이미지·동영상 다운과 게시물 캡쳐 PNG가 저장되는 곳<span id="save-default"> · 지금은 기본 폴더</span></p>
-        <div class="dirrow">
-          <code id="save-dir"></code>
-          <button id="save-pick" class="pill">변경</button>
-          <button id="save-open" class="pill">열기</button>
-          <button id="save-reset" class="pill">기본값</button>
+      <nav id="set-tabs" class="tabs" role="tablist">
+        <button role="tab" data-tab="general" aria-selected="true">일반</button>
+        <button role="tab" data-tab="keys" aria-selected="false">단축키</button>
+        <button role="tab" data-tab="xkeys" aria-selected="false">X 단축키</button>
+        <button role="tab" data-tab="update" aria-selected="false">업데이트</button>
+        <button role="tab" data-tab="adv" aria-selected="false">고급</button>
+      </nav>
+      <div class="panes">
+        <div class="pane" role="tabpanel" data-pane="general">
+          <section>
+            <h2>패널</h2>
+            <p class="hint">이름은 칸에서 고치고 Enter. 화살표로 순서 바꾸기 (<span class="modkey">Ctrl</span>+1~9는 화면 순서를 따라감).</p>
+            <div id="panel-rows"></div>
+          </section>
+          <section>
+            <h2>저장 폴더</h2>
+            <p class="hint">이미지·동영상 다운과 게시물 캡쳐 PNG가 저장되는 곳<span id="save-default"> · 지금은 기본 폴더</span></p>
+            <div class="dirrow">
+              <code id="save-dir"></code>
+              <button id="save-pick" class="pill">변경</button>
+              <button id="save-open" class="pill">열기</button>
+              <button id="save-reset" class="pill">기본값</button>
+            </div>
+          </section>
+          <section>
+            <h2>알림 표시</h2>
+            <p class="hint">안 읽은 알림·쪽지가 있으면 트레이 아이콘과 작업 표시줄 아이콘에 빨간 느낌표 (맥은 Dock·메뉴 막대에 숫자), 창 제목에 (3). 끄면 숫자는 상단 바와 트레이 툴팁에만 남음.</p>
+            <label class="check"><input type="checkbox" id="badge-auto"> 아이콘에 표시</label>
+            <p class="hint">새 알림·쪽지가 오면 시스템 알림 (맥은 알림 센터, 윈도우는 화면 구석 알림). 앱 창이 앞에 있을 땐 안 띄움, 같은 계정은 30초에 한 번까지. 누르면 그 패널로 감. 누가 뭘 했는지는 안 나오고 개수만.</p>
+            <label class="check"><input type="checkbox" id="notify-auto"> 시스템 알림</label>
+          </section>
+          <section>
+            <h2>패널 배율</h2>
+            <p class="hint">Ctrl(맥은 ⌘)을 누른 채 휠이나 트랙패드를 굴리면 배율이 바뀐다. 맥은 다른 단축키 누르다 트랙패드를 스치기만 해도 바뀌어서 기본으로 꺼 둠. 꺼도 배율 키(Ctrl/⌘ +, -, 0)는 그대로.</p>
+            <label class="check"><input type="checkbox" id="wheel-zoom"> 휠로 배율 조절</label>
+          </section>
         </div>
-      </section>
-      <section id="data-section" hidden>
-        <h2>포터블 데이터</h2>
-        <p class="hint" id="data-hint">설정·로그·로그인 데이터가 저장되는 exe 옆 폴더. 다른 PC로 옮기면 로그인은 다시 해야 함</p>
-        <div class="dirrow" id="data-row">
-          <code id="data-dir"></code>
-          <button id="data-open" class="pill">열기</button>
+        <div class="pane" role="tabpanel" data-pane="keys" hidden>
+          <section>
+            <h2>단축키</h2>
+            <p class="hint">키 칸을 누르고 새 조합을 누르면 바로 바뀜. Ctrl·Alt·⌘ 중 하나는 같이 눌러야 함 (F1~F24는 단독 가능).</p>
+            <div id="key-rows"></div>
+          </section>
         </div>
-      </section>
-      <section>
-        <h2>단축키</h2>
-        <p class="hint">키 칸을 누르고 새 조합을 누르면 바로 바뀜. Ctrl·Alt·⌘ 중 하나는 같이 눌러야 함 (F1~F24는 단독 가능).</p>
-        <div id="key-rows"></div>
-      </section>
-      <section>
-        <h2>X 단축키 <span class="sub">활성 패널에서</span></h2>
-        <p class="hint">X가 원래 쓰는 키를 다른 키로 바꾸거나 끔. 바꾸면 원래 키는 안 먹음 (g → h 같은 연속키는 원래 키도 그대로 됨). 글 입력칸에서는 안 바뀜. X에 없는 키로 바꾸면 그 키의 X 기능은 가려짐.</p>
-        <div id="xkey-rows"></div>
-      </section>
-      <section>
-        <h2>알림 표시</h2>
-        <p class="hint">안 읽은 알림·쪽지가 있으면 트레이 아이콘과 작업 표시줄 아이콘에 빨간 느낌표 (맥은 Dock·메뉴 막대에 숫자), 창 제목에 (3). 끄면 숫자는 상단 바와 트레이 툴팁에만 남음.</p>
-        <label class="check"><input type="checkbox" id="badge-auto"> 아이콘에 표시</label>
-        <p class="hint">새 알림·쪽지가 오면 시스템 알림 (맥은 알림 센터, 윈도우는 화면 구석 알림). 앱 창이 앞에 있을 땐 안 띄움, 같은 계정은 30초에 한 번까지. 누르면 그 패널로 감. 누가 뭘 했는지는 안 나오고 개수만.</p>
-        <label class="check"><input type="checkbox" id="notify-auto"> 시스템 알림</label>
-      </section>
-      <section>
-        <h2>패널 배율</h2>
-        <p class="hint">Ctrl(맥은 ⌘)을 누른 채 휠이나 트랙패드를 굴리면 배율이 바뀐다. 맥은 다른 단축키 누르다 트랙패드를 스치기만 해도 바뀌어서 기본으로 꺼 둠. 꺼도 배율 키(Ctrl/⌘ +, -, 0)는 그대로.</p>
-        <label class="check"><input type="checkbox" id="wheel-zoom"> 휠로 배율 조절</label>
-      </section>
-      <section>
-        <h2>새 버전</h2>
-        <p class="hint"><span id="up-hint">GitHub에 새 버전이 올라오면 상단 바와 트레이 메뉴에 표시. 설치는 직접 (받기를 누르면 릴리스 페이지가 열림).</span> 지금 버전 <b id="cur-ver"></b></p>
-        <label class="check"><input type="checkbox" id="up-auto"> 시작할 때와 6시간마다 확인</label>
-        <div class="dirrow uprow">
-          <span id="up-state"></span>
-          <button id="up-open" class="pill primary" hidden>받기</button>
-          <button id="up-skip" class="pill" hidden>이 버전 건너뛰기</button>
-          <button id="up-check" class="pill">지금 확인</button>
+        <div class="pane" role="tabpanel" data-pane="xkeys" hidden>
+          <section>
+            <h2>X 단축키 <span class="sub">활성 패널에서</span></h2>
+            <p class="hint">X가 원래 쓰는 키를 다른 키로 바꾸거나 끔. 바꾸면 원래 키는 안 먹음 (g → h 같은 연속키는 원래 키도 그대로 됨). 글 입력칸에서는 안 바뀜. X에 없는 키로 바꾸면 그 키의 X 기능은 가려짐.</p>
+            <div id="xkey-rows"></div>
+          </section>
         </div>
-        <div id="mac-install" hidden>
-          <p class="hint uprow">업데이트 버튼이 안 되거나 처음 설치할 땐 터미널에 아래 한 줄. 하는 일은 같다. 브라우저를 안 거쳐서 경고창이 안 뜬다.</p>
-          <div class="dirrow">
-            <code id="install-cmd">curl -fsSL https://raw.githubusercontent.com/Machrie/paneful/main/scripts/install-macos.sh | bash</code>
-            <button id="install-copy" class="pill">복사</button>
-          </div>
+        <div class="pane" role="tabpanel" data-pane="update" hidden>
+          <section>
+            <h2>새 버전</h2>
+            <p class="hint"><span id="up-hint">GitHub에 새 버전이 올라오면 상단 바와 트레이 메뉴에 표시. 설치는 직접 (받기를 누르면 릴리스 페이지가 열림).</span> 지금 버전 <b id="cur-ver"></b></p>
+            <label class="check"><input type="checkbox" id="up-auto"> 시작할 때와 6시간마다 확인</label>
+            <div class="dirrow uprow">
+              <span id="up-state"></span>
+              <button id="up-open" class="pill primary" hidden>받기</button>
+              <button id="up-skip" class="pill" hidden>이 버전 건너뛰기</button>
+              <button id="up-check" class="pill">지금 확인</button>
+            </div>
+            <div id="mac-install" hidden>
+              <p class="hint uprow">업데이트 버튼이 안 되거나 처음 설치할 땐 터미널에 아래 한 줄. 하는 일은 같다. 브라우저를 안 거쳐서 경고창이 안 뜬다.</p>
+              <div class="dirrow">
+                <code id="install-cmd">curl -fsSL https://raw.githubusercontent.com/Machrie/paneful/main/scripts/install-macos.sh | bash</code>
+                <button id="install-copy" class="pill">복사</button>
+              </div>
+            </div>
+          </section>
+          <section>
+            <h2>X 화면 규칙</h2>
+            <p class="hint">다운 버튼·캡쳐·익명화·알림 숫자가 X 화면에서 게시물·이름·사진·배지를 찾는 규칙. X가 화면을 바꾸면 저장소의 규칙 파일만 고쳐서 새 버전 없이 따라감. 받는 건 선택자 문자열뿐이고, 받기 실패나 이상한 파일이면 앱에 든 규칙을 씀.</p>
+            <label class="check"><input type="checkbox" id="rules-auto"> 시작할 때와 6시간마다 고친 규칙 받기 (끄면 앱에 든 규칙만)</label>
+            <div class="dirrow uprow">
+              <span id="rules-state"></span>
+              <button id="rules-check" class="pill">지금 확인</button>
+            </div>
+          </section>
         </div>
-      </section>
-      <section>
-        <h2>X 화면 규칙</h2>
-        <p class="hint">다운 버튼·캡쳐·익명화·알림 숫자가 X 화면에서 게시물·이름·사진·배지를 찾는 규칙. X가 화면을 바꾸면 저장소의 규칙 파일만 고쳐서 새 버전 없이 따라감. 받는 건 선택자 문자열뿐이고, 받기 실패나 이상한 파일이면 앱에 든 규칙을 씀.</p>
-        <label class="check"><input type="checkbox" id="rules-auto"> 시작할 때와 6시간마다 고친 규칙 받기 (끄면 앱에 든 규칙만)</label>
-        <div class="dirrow uprow">
-          <span id="rules-state"></span>
-          <button id="rules-check" class="pill">지금 확인</button>
+        <div class="pane" role="tabpanel" data-pane="adv" hidden>
+          <section>
+            <h2>패널 메모리</h2>
+            <p class="hint" id="mem-hint">재기를 누르면 이 탭을 떠나거나 설정을 닫을 때까지 몇 초마다 다시 잼.</p>
+            <div class="dirrow"><button id="mem-start" class="pill">재기</button></div>
+            <div id="mem-rows"></div>
+            <p id="mem-err" class="hint warn" hidden></p>
+          </section>
+          <section id="data-section" hidden>
+            <h2>포터블 데이터</h2>
+            <p class="hint" id="data-hint">설정·로그·로그인 데이터가 저장되는 exe 옆 폴더. 다른 PC로 옮기면 로그인은 다시 해야 함</p>
+            <div class="dirrow" id="data-row">
+              <code id="data-dir"></code>
+              <button id="data-open" class="pill">열기</button>
+            </div>
+          </section>
         </div>
-      </section>
-      <section>
-        <h2>패널 메모리</h2>
-        <p class="hint" id="mem-hint">재기를 누르면 설정을 닫을 때까지 몇 초마다 다시 잼.</p>
-        <div class="dirrow"><button id="mem-start" class="pill">재기</button></div>
-        <div id="mem-rows"></div>
-        <p id="mem-err" class="hint warn" hidden></p>
-      </section>
+      </div>
       <p id="settings-msg" class="foot" role="status"></p>
     </div>
   </div>

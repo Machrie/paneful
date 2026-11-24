@@ -220,7 +220,7 @@ function render() {
   stripEl.hidden = L.bar;
   overlayEl.hidden = !L.help;
   settingsEl.hidden = !L.settings;
-  memWatch(L.settings);
+  memWatch(L.settings && setTab === "adv");
   if (!L.settings && rec) stopRec();
   document.documentElement.style.setProperty("--top", `${L.top}px`);
   const s = L.panels.map((p) => `${p.id}\u0000${p.label}\u0000${p.color}`).join("\u0001");
@@ -549,6 +549,39 @@ $("settings-close").onclick = (e) => {
 settingsEl.addEventListener("click", (e) => {
   e.stopPropagation();
   if (e.target === settingsEl && !rec) toggleSettings();
+});
+
+// Tabs. The last one stays picked while the app runs (a restart opens 일반).
+let setTab = "general";
+const tabBtns = [...document.querySelectorAll("#set-tabs [role=tab]")];
+function pickTab(k, focus) {
+  if (k === setTab) return;
+  if (rec) stopRec();
+  setTab = k;
+  for (const b of tabBtns) {
+    const on = b.dataset.tab === k;
+    b.setAttribute("aria-selected", on ? "true" : "false");
+    b.tabIndex = on ? 0 : -1;
+    if (on && focus) b.focus();
+  }
+  for (const p of document.querySelectorAll("#settings .pane")) p.hidden = p.dataset.pane !== k;
+  document.querySelector("#settings .panes").scrollTop = 0;
+  settingsMsg("");
+  memWatch(!settingsEl.hidden && k === "adv");
+}
+for (const b of tabBtns) {
+  b.tabIndex = b.dataset.tab === setTab ? 0 : -1;
+  b.onclick = (e) => {
+    e.stopPropagation();
+    pickTab(b.dataset.tab);
+  };
+}
+$("set-tabs").addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  e.preventDefault();
+  const i = tabBtns.findIndex((b) => b.dataset.tab === setTab);
+  const n = (i + (e.key === "ArrowRight" ? 1 : -1) + tabBtns.length) % tabBtns.length;
+  pickTab(tabBtns[n].dataset.tab, true);
 });
 
 function settingsMsg(text, bad) {
@@ -918,7 +951,7 @@ window.addEventListener(
 );
 
 // ---- panel memory (settings screen). Measured only after 재기 is pressed,
-// then again every MEM_EVERY while settings stays open. Not on open: the
+// then again every MEM_EVERY while settings stays open on the 고급 tab. Not on open: the
 // WebView2 process query is the newest native code on this screen, so
 // opening settings must not depend on it.
 let memTimer = null;
@@ -1012,7 +1045,7 @@ function memRow(name, bytes, { color, sub, top, total, reloadId } = {}) {
 function renderMem(r) {
   const box = $("mem-rows");
   box.replaceChildren();
-  $("mem-hint").textContent = `${r.method || ""} 설정을 닫을 때까지 ${MEM_EVERY / 1000}초마다 다시 잼.`.trim();
+  $("mem-hint").textContent = `${r.method || ""} 이 탭을 떠나거나 설정을 닫을 때까지 ${MEM_EVERY / 1000}초마다 다시 잼.`.trim();
   $("mem-err").hidden = !r.error;
   $("mem-err").textContent = r.error ? `일부를 못 잼: ${r.error}` : "";
   const known = r.panels.filter((p) => p.bytes != null).map((p) => p.bytes);
