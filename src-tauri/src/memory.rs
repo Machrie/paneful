@@ -31,6 +31,8 @@ pub struct PanelMem {
     pub procs: usize,
     /// Last dead panel recovery (health.rs).
     pub last: Option<crate::health::Last>,
+    /// Turned off by hand (패널 끄기): nothing to measure.
+    pub off: bool,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -129,6 +131,7 @@ pub async fn measure<R: Runtime>(app: &AppHandle<R>) -> Report {
                 bytes: s.map(|s| s.0),
                 procs: s.map_or(0, |s| s.1),
                 last: crate::health::last(label),
+                off: crate::is_off(app, label),
             }
         })
         .collect();
@@ -443,17 +446,18 @@ fn own_size() -> Option<u64> {
 #[cfg(target_os = "macos")]
 const METHOD: &str = "물리 메모리 기준 (활성 상태 보기 '메모리' 열). 패널마다 웹 콘텐츠 프로세스만 셈. WebKit GPU·네트워크 프로세스는 못 재서 빠짐.";
 
+/// WebContent process id of each of these webviews that exists (labels;
+/// None: the private API isn't there or there is no process yet).
 #[cfg(target_os = "macos")]
-async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String], trace: bool) -> Collected {
+async fn pids<R: Runtime>(app: &AppHandle<R>, labels: &[&str]) -> Result<Vec<(String, Option<u32>)>, String> {
     use objc2::{msg_send, sel};
     use objc2_foundation::NSObjectProtocol;
     use objc2_web_kit::WKWebView;
     use std::sync::mpsc;
 
-    let m = || METHOD.to_string();
     let (tx, rx) = mpsc::channel::<(String, Option<u32>)>();
     let mut asked = 0usize;
-    for label in labels.iter().map(String::as_str).chain([crate::HOST]) {
+    for label in labels {
         let Some(wv) = app.get_webview(label) else { continue };
         let tx = tx.clone();
         let label = label.to_string();
@@ -472,7 +476,37 @@ async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String], trace: bool)
         }
     }
     drop(tx);
-    let got = recv_n(rx, asked).await.map_err(|e| (m(), e))?;
+    recv_n(rx, asked).await
+}
+
+/// 패널 끄기: the WebContent process of `label`, if no other webview (panel
+/// or host UI) uses it, so killing it takes nothing else down.
+#[cfg(target_os = "macos")]
+pub async fn own_pid<R: Runtime>(app: &AppHandle<R>, label: &str) -> Option<u32> {
+    let labels: Vec<String> = app.webviews().into_keys().collect();
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let got = match pids(app, &refs).await {
+        Ok(g) => g,
+        Err(e) => {
+            log::warn!("[{label}] process id not read: {e}");
+            return None;
+        }
+    };
+    let mine = got.iter().find(|(l, _)| l == label).and_then(|(_, p)| *p)?;
+    let shared = got.iter().any(|(l, p)| l != label && *p == Some(mine));
+    if shared {
+        log::info!("[{label}] web content process {mine} is shared, not killing it");
+        return None;
+    }
+    Some(mine)
+}
+
+#[cfg(target_os = "macos")]
+async fn collect<R: Runtime>(app: &AppHandle<R>, labels: &[String], trace: bool) -> Collected {
+    let m = || METHOD.to_string();
+    let all: Vec<&str> = labels.iter().map(String::as_str).chain([crate::HOST]).collect();
+    let asked = all.len();
+    let got = pids(app, &all).await.map_err(|e| (m(), e))?;
     step!(trace, "{} of {asked} process ids", got.len());
     if got.iter().all(|(_, p)| p.is_none()) {
         return Err((m(), "웹 콘텐츠 프로세스 번호를 못 얻음 (이 macOS의 WebKit에서 막힘)".into()));

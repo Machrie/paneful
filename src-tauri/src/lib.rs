@@ -24,7 +24,11 @@ mod zoom;
 
 use serde::Serialize;
 use settings::{Account, Persist, Settings, COLORS};
-use std::{collections::BTreeMap, path::PathBuf, sync::Mutex};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::PathBuf,
+    sync::Mutex,
+};
 use uuid::Uuid;
 use tauri::{
     webview::{NewWindowResponse, WebviewBuilder},
@@ -76,6 +80,9 @@ pub(crate) struct AppState {
     /// Unread counts per account as its panel shows them (unread.rs).
     /// Only accounts with something unread are in here. Not persisted.
     unread: Mutex<BTreeMap<Uuid, unread::Unread>>,
+    /// Panels turned off by hand (패널 끄기): the account stays, its webview
+    /// is closed until 다시 켜기. Not persisted, every panel starts on.
+    off: Mutex<HashSet<Uuid>>,
     path: PathBuf,
     persist: Persist,
 }
@@ -109,6 +116,8 @@ struct PanelView {
     unread: unread::Unread,
     /// On screen (false: hidden while another panel is zoomed).
     shown: bool,
+    /// Turned off by hand (no webview, the host UI shows 다시 켜기 there).
+    off: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -260,6 +269,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
         rules::status_of(&state.rules.lock().unwrap(), &st)
     };
     let unread = state.unread.lock().unwrap().clone();
+    let off = state.off.lock().unwrap().clone();
     let (w, h) = logical_size(&window);
     let top = top_of(&s);
     let mut rects = layout::panels(w, h, top, &s.ratios);
@@ -308,6 +318,7 @@ pub(crate) fn relayout<R: Runtime>(app: &AppHandle<R>) {
             zoom: acc.zoom,
             unread: unread.get(&acc.id).cloned().unwrap_or_default(),
             shown,
+            off: off.contains(&acc.id),
         });
     }
     let payload = LayoutPayload {
@@ -1273,7 +1284,9 @@ async fn send_link(app: AppHandle, state: State<'_, AppState>, webview: Webview,
         },
     };
     let (id, label) = (pick.0, pick.1.label.clone());
-    let wv = app.get_webview(&format!("panel-{}", id.simple())).ok_or("그 패널이 없음")?;
+    let wv = app.get_webview(&format!("panel-{}", id.simple())).ok_or_else(|| {
+        if state.off.lock().unwrap().contains(&id) { "그 패널은 꺼져 있음" } else { "그 패널이 없음" }
+    })?;
     log::info!("send_link: {url} from {me} to {id}");
     wv.navigate(url).map_err(|e| e.to_string())?;
     focus_account(&app, id);
@@ -1369,7 +1382,11 @@ async fn reload_panel(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 /// Reload one panel by webview label (button, menu, `reload` shortcut).
+/// A panel turned off is turned back on instead.
 async fn reload_label<R: Runtime>(app: &AppHandle<R>, label: &str) -> Result<(), String> {
+    if is_off(app, label) {
+        return start_label(app, label).await;
+    }
     let dead = health::is_dead(label);
     health::reset(label);
     if dead {
@@ -1377,6 +1394,79 @@ async fn reload_label<R: Runtime>(app: &AppHandle<R>, label: &str) -> Result<(),
     }
     let wv = app.get_webview(label).ok_or("no such panel")?;
     wv.reload().map_err(|e| e.to_string())
+}
+
+/// Account id of a panel webview label, from any thread.
+fn account_id_of<R: Runtime>(app: &AppHandle<R>, label: &str) -> Option<Uuid> {
+    panel_id(&app.state::<AppState>(), label)
+}
+
+/// Panel turned off by hand (패널 끄기). health.rs leaves these alone.
+pub(crate) fn is_off<R: Runtime>(app: &AppHandle<R>, label: &str) -> bool {
+    account_id_of(app, label).is_some_and(|id| app.state::<AppState>().off.lock().unwrap().contains(&id))
+}
+
+/// 패널 끄기 (tab button, settings memory list): close the panel's webview
+/// and leave the account in place, so a stuck panel can be stopped without
+/// quitting the app, and started again with 다시 켜기 (`start_panel`).
+/// Closing the webview doesn't need the page to answer, so it works on a
+/// frozen panel too. macOS: its web content process is also killed if no
+/// other webview shares it, in case a hung one doesn't exit on its own.
+#[tauri::command]
+async fn stop_panel(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let uid = {
+        let s = state.settings.lock().unwrap();
+        s.accounts.iter().find(|a| a.id.to_string() == id).map(|a| a.id).ok_or("no such account")?
+    };
+    let label = format!("panel-{}", uid.simple());
+    // Marked first: a termination notice from the closing page is ignored
+    // (health.rs), not answered with a reload.
+    if !state.off.lock().unwrap().insert(uid) {
+        return Ok(());
+    }
+    log::info!("[{label}] stopping panel");
+    state.unread.lock().unwrap().remove(&uid);
+    health::forget(&label);
+    #[cfg(target_os = "macos")]
+    let pid = memory::own_pid(&app, &label).await;
+    if let Some(wv) = app.get_webview(&label) {
+        if let Err(e) = wv.close() {
+            state.off.lock().unwrap().remove(&uid);
+            return Err(e.to_string());
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(pid) = pid {
+        // Sent after close(), so the page's delegate is already gone.
+        let r = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        log::info!("[{label}] web content process {pid} killed: {}", r == 0);
+    }
+    relayout(&app);
+    tray::refresh(&app);
+    Ok(())
+}
+
+/// 다시 켜기: build a panel turned off with `stop_panel` again.
+#[tauri::command]
+async fn start_panel(app: AppHandle, id: String) -> Result<(), String> {
+    start_label(&app, &format!("panel-{}", id.replace('-', ""))).await
+}
+
+async fn start_label<R: Runtime>(app: &AppHandle<R>, label: &str) -> Result<(), String> {
+    let id = account_id_of(app, label).ok_or("no such panel")?;
+    log::info!("[{label}] starting panel");
+    health::forget(label);
+    app.state::<AppState>().off.lock().unwrap().remove(&id);
+    if let Err(e) = recreate_panel(app, label).await {
+        // Still no webview: keep showing it as off, so 다시 켜기 stays.
+        if app.get_webview(label).is_none() {
+            app.state::<AppState>().off.lock().unwrap().insert(id);
+            relayout(app);
+        }
+        return Err(e);
+    }
+    focus_account(app, id);
+    Ok(())
 }
 
 /// Settings screen: memory per panel (memory.rs).
@@ -1430,6 +1520,7 @@ async fn remove_account(app: AppHandle, state: State<'_, AppState>, id: String) 
         }
         drop(active);
         state.unread.lock().unwrap().remove(&acc.id);
+        state.off.lock().unwrap().remove(&acc.id);
         s.ratios = layout::clamp_ratios(w, &layout::with_removed(&s.ratios, idx));
         s.fix_ratios();
         #[cfg(windows)]
@@ -1936,6 +2027,7 @@ pub fn run() {
                 rules: Mutex::new(rules::initial(app.handle(), s.rules_update)),
                 rules_status: Mutex::new(rules::Status::default()),
                 unread: Mutex::new(BTreeMap::new()),
+                off: Mutex::new(HashSet::new()),
                 path,
                 persist,
             };
@@ -2018,6 +2110,8 @@ pub fn run() {
             set_ratios,
             commit_layout,
             reload_panel,
+            stop_panel,
+            start_panel,
             panel_memory,
             add_account,
             remove_account,
