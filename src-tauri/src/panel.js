@@ -5,7 +5,9 @@
 //    wheel for zoom)
 // 3. "복사한 X 링크 열기" (configurable, Ctrl/Cmd+O by default): ask Rust
 //    for the X link on the clipboard (Rust reads the clipboard, not the
-//    page), ask the user, then open it in this panel
+//    page), ask the user, then open it in this panel (`paneful-go`: inside
+//    the page, like X's own links; a panel stuck on X's loading logo goes
+//    back to x.com/home)
 // 4. "다른 패널에서 열기": the shortcut, then a click on a post (or Enter
 //    for this page) sends it to another panel; with several others the
 //    panel layout is drawn to pick one
@@ -17,7 +19,7 @@
 // 7. X's own shortcuts moved in settings: outside text fields, the user's
 //    key is swallowed and X gets its own key instead; X's old key is
 //    swallowed once moved or turned off.
-// The panel capability only allows `panel_focused`, `panel_unread`, `panel_view` (log only), `shortcut`,
+// The panel capability only allows `panel_focused`, `panel_unread`, `panel_view` and `panel_stuck` (log only), `shortcut`,
 // `panel_keys` / `panel_xkeys` (read the configured bindings), `paste_link`, `open_link`,
 // `send_link` and, for capture.js,
 // `capture_begin` / `capture_shot` / `capture_drop` / `capture_finish`.
@@ -138,6 +140,9 @@
       if (a.action.startsWith("zoom_") && capturing()) return;
       // Holding a toggle key would flip it on and off; only the first press counts.
       if (e.repeat && ["bar", "help", "settings", "capture", "zoom", "send", "reload"].includes(a.action)) return;
+      // Reloading a panel stuck on X's loading logo loads the same stuck
+      // address again: go home instead (see goHome).
+      if (a.action === "reload" && stuck() && goHome("reload", true)) return;
       // This page knows which post is meant; Rust only opens it.
       if (a.action === "send") startPick();
       else if (a.action === "paste") {
@@ -489,6 +494,54 @@
     }, () => {});
   };
   window.addEventListener("paneful-paste", pasteLink);
+
+  // ---- go to an X address inside the page (open_link, send_link)
+  // Rust sends `paneful-go` (cancelable, the address in detail). Taken here,
+  // the address changes the way X moves between its own pages: pushState,
+  // then popstate, which X's router follows, so no new document. Not taken
+  // (another site, X not up yet), Rust's snippet loads the address. A full
+  // load of a post address used to leave macOS panels on X's loading logo.
+  const onX = () => location.hostname === "x.com";
+  const started = () => !!document.querySelector(S("booted"));
+  window.addEventListener("paneful-go", (e) => {
+    let u;
+    try {
+      u = new URL(String(e.detail));
+    } catch (_) {
+      return;
+    }
+    if (!onX() || u.origin !== location.origin || !started()) return;
+    e.preventDefault();
+    const to = u.pathname + u.search + u.hash;
+    if (location.pathname + location.search + location.hash !== to) history.pushState(null, "", to);
+    window.dispatchEvent(new PopStateEvent("popstate", { state: null }));
+  });
+
+  // ---- stuck on X's loading logo
+  // X didn't draw a page (S("booted")) STUCK_MS after this document began:
+  // go to x.com/home, where the app starts and which has loaded every time.
+  // At most once a minute on its own (sessionStorage outlives the load), so
+  // a home page that doesn't start either doesn't loop; Cmd/Ctrl+R on a
+  // stuck panel always goes (keydown above).
+  const STUCK_MS = 15000;
+  const bornAt = Date.now();
+  const STUCK_KEY = "paneful.stuckHome";
+  const stuck = () => onX() && document.readyState !== "loading" && !started() && Date.now() - bornAt > 5000;
+  const goHome = (why, force) => {
+    if (location.pathname === "/home" && !force) return false;
+    let last = 0;
+    try {
+      last = Number(sessionStorage.getItem(STUCK_KEY)) || 0;
+    } catch (_) {}
+    if (!force && Date.now() - last < 60000) return false;
+    try {
+      sessionStorage.setItem(STUCK_KEY, String(Date.now()));
+    } catch (_) {}
+    call("panel_stuck", { path: location.pathname, why }).catch(() => {});
+    location.replace("https://x.com/home");
+    return true;
+  };
+  if (onX()) setTimeout(() => stuck() && goHome("timer", false), STUCK_MS);
 
   // ---- unread counts
   // Badge = a leaf element on the nav link whose text is just a number

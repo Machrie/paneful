@@ -22,6 +22,7 @@ fn main() {
             "paste_link",
             "open_link",
             "send_link",
+            "panel_stuck",
             "rename_account",
             "move_account",
             "set_key",
