@@ -44,6 +44,8 @@ const MAX_VALUE: usize = 400;
 pub const SELECTORS: &[&str] = &[
     "post",
     "column",
+    // X has drawn a page (not its loading logo): panel.js, stuck check.
+    "booted",
     "modal",
     "statusLink",
     "userName",

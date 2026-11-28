@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-panel-stuck"
+description = "Enables the panel_stuck command without any pre-configured scope."
+commands.allow = ["panel_stuck"]
+
+[[permission]]
+identifier = "deny-panel-stuck"
+description = "Denies the panel_stuck command without any pre-configured scope."
+commands.deny = ["panel_stuck"]

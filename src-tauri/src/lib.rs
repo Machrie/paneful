@@ -721,7 +721,7 @@ fn purge_pending_profiles(app: &tauri::App, s: &mut Settings) {
 
 // ---------------------------------------------------------------- commands
 // The host webview may call these (capabilities/host.json); x.com panels only
-// panel_focused, panel_unread, panel_view, shortcut, panel_keys, panel_xkeys, paste_link, open_link, send_link and capture_begin/shot/drop/finish
+// panel_focused, panel_unread, panel_view, panel_stuck, shortcut, panel_keys, panel_xkeys, paste_link, open_link, send_link and capture_begin/shot/drop/finish
 // (capabilities/panel.json). Commands are async
 // because add_child from a sync command deadlocks on WebView2.
 
@@ -1211,7 +1211,42 @@ async fn open_link(state: State<'_, AppState>, webview: Webview, url: String) ->
     }
     let url = nav::x_link(&url).map_err(|_| "X 링크가 아님".to_string())?;
     log::info!("open_link: opening {url} in {}", webview.label());
-    webview.navigate(url).map_err(|e| e.to_string())
+    go_to(&webview, &url)
+}
+
+/// Open `url` (already checked with nav::x_link) in a panel the way X moves
+/// between its own pages: panel.js changes the address in the page and X
+/// draws it (history.pushState + popstate), no new document. A full load of
+/// a post address (webview.navigate) left macOS panels on X's loading logo,
+/// Cmd+R loaded the same address again, and only a restart (back at
+/// x.com/home) brought them back.
+/// panel.js takes the event only on x.com once X has started; otherwise
+/// (another page, X not up yet, no panel.js) the snippet loads the address.
+fn go_to<R: Runtime>(wv: &Webview<R>, url: &url::Url) -> Result<(), String> {
+    wv.eval(go_js(url)).map_err(|e| e.to_string())
+}
+
+fn go_js(url: &url::Url) -> String {
+    // A JSON string is a JS string literal; Url output is percent-encoded,
+    // so no U+2028/2029 either.
+    let u = serde_json::to_string(url.as_str()).unwrap_or_default();
+    format!(
+        "(()=>{{const u={u};const e=new CustomEvent('paneful-go',{{detail:u,cancelable:true}});\
+         if(window.dispatchEvent(e))location.assign(u);}})()"
+    )
+}
+
+/// The calling panel sat on X's loading logo and panel.js sent it to
+/// x.com/home (`why`: "timer" or "reload"). Log only.
+#[tauri::command]
+async fn panel_stuck(state: State<'_, AppState>, webview: Webview, path: String, why: String) -> Result<(), String> {
+    if !is_panel(&state, &webview) {
+        return Err("not a panel".into());
+    }
+    let path: String = path.chars().filter(|c| !c.is_control()).take(300).collect();
+    let why: String = why.chars().filter(char::is_ascii_alphanumeric).take(20).collect();
+    log::info!("[{}] stuck on X's loading screen at {path} ({why}): going to x.com/home", webview.label());
+    Ok(())
 }
 
 /// One panel a link can be sent to.
@@ -1275,7 +1310,7 @@ async fn send_link(app: AppHandle, state: State<'_, AppState>, webview: Webview,
     let (id, label) = (pick.0, pick.1.label.clone());
     let wv = app.get_webview(&format!("panel-{}", id.simple())).ok_or("그 패널이 없음")?;
     log::info!("send_link: {url} from {me} to {id}");
-    wv.navigate(url).map_err(|e| e.to_string())?;
+    go_to(&wv, &url)?;
     focus_account(&app, id);
     Ok(Sent { to: Some(label), ..Default::default() })
 }
@@ -2030,6 +2065,7 @@ pub fn run() {
             paste_link,
             open_link,
             send_link,
+            panel_stuck,
             rename_account,
             move_account,
             set_key,
@@ -2060,4 +2096,16 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running paneful");
+}
+
+#[cfg(test)]
+mod go_tests {
+    #[test]
+    fn go_js_quotes_the_address() {
+        let u = crate::nav::x_link("https://x.com/a/status/1?x=\"'</script>").unwrap();
+        let js = super::go_js(&u);
+        assert!(js.contains("paneful-go"));
+        assert!(js.contains(&serde_json::to_string(u.as_str()).unwrap()));
+        assert!(!js.contains('"') || js.matches('"').count() == 2, "only the JSON string's quotes: {js}");
+    }
 }

@@ -1,9 +1,10 @@
 {
   "format": 1,
-  "revision": 1,
+  "revision": 2,
   "selectors": {
     "post": "article[data-testid=\"tweet\"]",
     "column": "[data-testid=\"primaryColumn\"]",
+    "booted": "main[role=\"main\"], [data-testid=\"primaryColumn\"], [aria-modal=\"true\"]",
     "modal": "[aria-modal=\"true\"]",
     "statusLink": "a[href*=\"/status/\"]",
     "userName": "[data-testid=\"User-Name\"]",
