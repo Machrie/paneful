@@ -11,6 +11,7 @@ const { listen } = window.__TAURI__.event;
 
 const $ = (id) => document.getElementById(id);
 const tabsEl = $("tabs");
+const offsEl = $("offs");
 const divsEl = $("dividers");
 const statusEl = $("status");
 const barEl = $("bar");
@@ -42,6 +43,7 @@ const ICONS = {
   pencil: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>',
   arrowLeft: '<svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>',
   arrowRight: '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>',
+  power: '<svg viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>',
   camera: '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg>',
 };
 function setIcon(el, name) {
@@ -223,7 +225,7 @@ function render() {
   memWatch(L.settings && setTab === "adv");
   if (!L.settings && rec) stopRec();
   document.documentElement.style.setProperty("--top", `${L.top}px`);
-  const s = L.panels.map((p) => `${p.id}\u0000${p.label}\u0000${p.color}`).join("\u0001");
+  const s = L.panels.map((p) => `${p.id}\u0000${p.label}\u0000${p.color}\u0000${p.off ? 1 : 0}`).join("\u0001");
   const ks = JSON.stringify([L.keys, L.x_keys, L.global, L.hotkey, L.hotkey_error, L.save_dir, L.data_dir, L.data_warning]);
   if (ks !== keysShape && !rec) {
     keysShape = ks;
@@ -253,6 +255,7 @@ function render() {
 
 function build() {
   tabsEl.replaceChildren();
+  offsEl.replaceChildren();
   divsEl.replaceChildren();
   stripEl.replaceChildren();
   L.panels.forEach((p, i) => {
@@ -302,11 +305,19 @@ function build() {
       ask.hidden = false;
     });
     del.classList.add("danger");
+    const power = iconButton(
+      "power",
+      p.off ? "다시 켜기" : "패널 끄기 (멈췄을 때 이 패널만 껐다 켜기)",
+      () => invoke(p.off ? "start_panel" : "stop_panel", { id: p.id }).catch(showError),
+    );
+    power.classList.add("power");
     normal.append(
       Object.assign(iconButton("pencil", "이름·순서 바꾸기 (설정)", () => toggleSettings()), { className: "icon to-settings" }),
       Object.assign(iconButton("reload", reloadTitle(), () => invoke("reload_panel", { id: p.id }).catch(showError)), { className: "icon reload" }),
+      power,
       del,
     );
+    if (p.off) t.classList.add("off");
     const cancel = () => {
       ask.hidden = true;
       normal.hidden = false;
@@ -329,6 +340,26 @@ function build() {
 
     t.append(dot, name, bn, bdm, key, zoom, normal, ask);
     tabsEl.append(t);
+
+    // Turned off: the host UI shows through where the panel was.
+    const off = document.createElement("div");
+    off.className = "off-panel";
+    off.hidden = !p.off;
+    if (p.off) {
+      const msg = document.createElement("p");
+      msg.textContent = `'${p.label}' 패널 꺼짐`;
+      const on = pill("다시 켜기", async () => {
+        on.disabled = true;
+        try {
+          await invoke("start_panel", { id: p.id });
+        } catch (e) {
+          showError(e);
+          on.disabled = false;
+        }
+      });
+      off.append(msg, on);
+    }
+    offsEl.append(off);
 
     if (i < L.panels.length - 1) {
       const d = document.createElement("div");
@@ -376,6 +407,14 @@ function place() {
     seg.style.width = L.zoom ? `${segW}px` : `${p.rect.w}px`;
     seg.classList.toggle("active", p.active);
     seg.classList.toggle("unread", !!unreadText(p));
+    const o = offsEl.children[i];
+    if (o) {
+      o.hidden = !p.off || !p.shown;
+      o.style.left = `${p.rect.x}px`;
+      o.style.top = `${p.rect.y}px`;
+      o.style.width = `${p.rect.w}px`;
+      o.style.height = `${p.rect.h}px`;
+    }
     const d = divsEl.children[i];
     if (d) {
       d.style.left = `${p.rect.x + p.rect.w}px`;
@@ -998,7 +1037,7 @@ async function measureMem() {
 function timeOf(ms) {
   return new Date(ms).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
 }
-function memRow(name, bytes, { color, sub, top, total, reloadId } = {}) {
+function memRow(name, bytes, { color, sub, top, total, reloadId, off } = {}) {
   const row = document.createElement("div");
   row.className = "memrow" + (total ? " total" : "");
   const n = document.createElement("span");
@@ -1023,20 +1062,25 @@ function memRow(name, bytes, { color, sub, top, total, reloadId } = {}) {
   v.textContent = mb(bytes);
   row.append(n, v);
   if (reloadId) {
-    row.append(
-      pill("새로고침", async (e) => {
+    // One action at a time: what it says, and what to show when it worked.
+    const act = (text, cmd, done) =>
+      pill(text, async (e) => {
         e.target.disabled = true;
         try {
-          await invoke("reload_panel", { id: reloadId });
-          settingsMsg(`'${name}' 새로고침함`);
+          await invoke(cmd, { id: reloadId });
+          settingsMsg(`'${name}' ${done}`);
           setTimeout(measureMem, 1500);
         } catch (err) {
           settingsMsg(err, true);
         } finally {
           e.target.disabled = false;
         }
-      }),
-    );
+      });
+    const btns = document.createElement("span");
+    btns.className = "mbtns";
+    if (off) btns.append(act("다시 켜기", "start_panel", "다시 켬"));
+    else btns.append(act("새로고침", "reload_panel", "새로고침함"), act("끄기", "stop_panel", "끔"));
+    row.append(btns);
   } else {
     row.append(document.createElement("span"));
   }
@@ -1054,9 +1098,10 @@ function renderMem(r) {
     box.append(
       memRow(p.label, p.bytes, {
         color: p.color,
-        sub: p.bytes == null ? "프로세스를 못 찾음" : p.procs > 1 ? `프로세스 ${p.procs}개` : "",
+        sub: p.off ? "꺼짐" : p.bytes == null ? "프로세스를 못 찾음" : p.procs > 1 ? `프로세스 ${p.procs}개` : "",
         top: max != null && p.bytes === max,
         reloadId: p.id,
+        off: p.off,
       }),
     );
     if (p.last) {

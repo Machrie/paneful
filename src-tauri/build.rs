@@ -8,6 +8,8 @@ fn main() {
             "set_ratios",
             "commit_layout",
             "reload_panel",
+            "stop_panel",
+            "start_panel",
             "panel_memory",
             "add_account",
             "remove_account",
