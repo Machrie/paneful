@@ -13,6 +13,8 @@
 //!   the hook tauri-runtime-wry already reloads, but with no limit and no
 //!   notice; this replaces that.
 //!
+//! Panels turned off by hand (패널 끄기, `crate::is_off`) are left alone.
+//!
 //! The host UI hears about each recovery through the `panel-health` event,
 //! and the settings screen shows the last one per panel (`last`).
 //! The lock here is never held while touching a webview.
@@ -128,6 +130,11 @@ fn account_of<R: Runtime>(app: &AppHandle<R>, label: &str) -> Option<(String, St
 /// Decides, records and tells the host UI. `dead`: the webview itself is
 /// gone (Windows browser process). Returns whether to recover now.
 pub fn report<R: Runtime>(app: &AppHandle<R>, label: &str, why: &str, dead: bool) -> bool {
+    if crate::is_off(app, label) {
+        // 패널 끄기 is closing it (and on macOS killing its process).
+        log::info!("[{label}] {why}: panel turned off, left alone");
+        return false;
+    }
     let Some((id, name)) = account_of(app, label) else {
         // Host UI or a sign-in popup: always bring it back, nothing to show.
         log::warn!("[{label}] {why}: not a panel, reloading");
